@@ -1,0 +1,5 @@
+[package]
+name = "webox-ui"
+edition.workspace = true
+license.workspace = true
+version.workspace = true

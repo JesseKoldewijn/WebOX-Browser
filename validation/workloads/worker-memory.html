@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Worker Memory Fixture</title>
+  </head>
+  <body>
+    <h1>Worker Memory Fixture</h1>
+    <p id="status">Starting workers...</p>
+    <script>
+      const status = document.getElementById("status");
+      const worker = new Worker(
+        URL.createObjectURL(
+          new Blob([
+            `onmessage = () => {
+              const buffers = [];
+              for (let i = 0; i < 64; i += 1) buffers.push(new ArrayBuffer(1024 * 1024));
+              postMessage({ buffers: buffers.length });
+            }`,
+          ], { type: "text/javascript" }),
+        ),
+      );
+      worker.onmessage = (event) => {
+        status.textContent = `Allocated ${event.data.buffers} MB chunks in worker.`;
+      };
+      worker.postMessage({});
+    </script>
+  </body>
+</html>

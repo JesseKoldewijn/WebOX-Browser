@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Large DOM Fixture</title>
+    <style>
+      body { font-family: sans-serif; }
+      .grid { display: grid; gap: 4px; grid-template-columns: repeat(12, 1fr); }
+      .cell { background: linear-gradient(135deg, #0f766e, #164e63); color: white; padding: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Large DOM Fixture</h1>
+    <div class="grid" id="grid"></div>
+    <script>
+      const grid = document.getElementById("grid");
+      for (let i = 0; i < 5000; i += 1) {
+        const cell = document.createElement("div");
+        cell.className = "cell";
+        cell.textContent = `Cell ${i}`;
+        grid.appendChild(cell);
+      }
+    </script>
+  </body>
+</html>

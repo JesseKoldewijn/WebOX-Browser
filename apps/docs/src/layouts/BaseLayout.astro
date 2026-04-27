@@ -1,0 +1,41 @@
+---
+import { brand, navItems } from "@webox/brand";
+import "../styles/global.css";
+
+interface Props {
+  title: string;
+}
+
+const { title } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={brand.tagline} />
+    <title>{title}</title>
+  </head>
+  <body>
+    <div class="shell">
+      <header class="site-header">
+        <div class="brand-mark">
+          <span class="eyebrow">{brand.longName}</span>
+          <strong>{brand.name}</strong>
+        </div>
+        <nav class="nav" aria-label="Primary">
+          {navItems.map((item) => (
+            <a href={item.href}>{item.label}</a>
+          ))}
+        </nav>
+      </header>
+      <main class="site-main">
+        <slot />
+      </main>
+      <footer class="site-footer">
+        Built inside the webox monorepo for product storytelling and developer onboarding.
+      </footer>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,10 @@
+[package]
+name = "webox-runtime-api"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+webox-config = { path = "../config" }
+webox-engine = { path = "../engine" }
+webox-memory = { path = "../memory" }

@@ -1,0 +1,17 @@
+{
+  "name": "webox-monorepo",
+  "private": true,
+  "workspaces": [
+    "apps/docs",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun run scripts/dev.ts",
+    "docs:dev": "bun --cwd apps/docs run dev",
+    "docs:build": "bun --cwd apps/docs run build",
+    "docs:check": "bun --cwd apps/docs run check",
+    "setup:cef": "bun run scripts/setup_cef.ts",
+    "validate:workloads:supported": "cargo run -p webox-workload-harness -- supported",
+    "validate:workloads:constrained": "cargo run -p webox-workload-harness -- constrained"
+  }
+}

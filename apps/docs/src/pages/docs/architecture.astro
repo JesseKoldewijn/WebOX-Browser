@@ -1,0 +1,36 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import { docsSections } from "@webox/contracts";
+---
+
+<BaseLayout title="webox | architecture">
+  <section class="panel doc-content">
+    <div class="eyebrow">Architecture</div>
+    <h1>How webox is organized</h1>
+    <div class="grid">
+      <article>
+        <strong>apps/browser</strong>
+        <p>Standalone browser entrypoint.</p>
+      </article>
+      <article>
+        <strong>crates/*</strong>
+        <p>Rust shell, engine, memory, UI, and runtime modules.</p>
+      </article>
+      <article>
+        <strong>packages/*</strong>
+        <p>Shared branding and contracts for browser-adjacent surfaces.</p>
+      </article>
+      <article>
+        <strong>apps/docs</strong>
+        <p>Astro site with SolidJS islands for product and developer communication.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="panel doc-content" style={{ marginTop: "20px" }}>
+    <h2>Documentation sections</h2>
+    <ul>
+      {docsSections.map((section) => <li>{section.title}</li>)}
+    </ul>
+  </section>
+</BaseLayout>

@@ -1,0 +1,11 @@
+[package]
+name = "webox-shell"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+webox-config = { path = "../config" }
+webox-engine = { path = "../engine" }
+webox-memory = { path = "../memory" }
+webox-ui = { path = "../ui" }

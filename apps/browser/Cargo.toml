@@ -1,0 +1,13 @@
+[package]
+name = "webox-browser-app"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+eframe = { version = "0.34.1", default-features = true, features = ["wgpu", "x11", "wayland"] }
+egui_extras = "0.34.1"
+webox-config = { path = "../../crates/config" }
+webox-memory = { path = "../../crates/memory" }
+webox-shell = { path = "../../crates/shell" }
+webox-ui = { path = "../../crates/ui" }

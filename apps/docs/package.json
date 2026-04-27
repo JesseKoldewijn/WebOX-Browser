@@ -1,0 +1,19 @@
+{
+  "name": "@webox/docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/check": "^0.9.4",
+    "@astrojs/solid-js": "^5.1.0",
+    "@webox/brand": "workspace:*",
+    "@webox/contracts": "workspace:*",
+    "astro": "^5.7.10",
+    "solid-js": "^1.9.9",
+    "typescript": "^5.8.3"
+  }
+}

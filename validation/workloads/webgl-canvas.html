@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Canvas Fixture</title>
+  </head>
+  <body>
+    <canvas id="canvas" width="1400" height="800"></canvas>
+    <script>
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
+      for (let x = 0; x < canvas.width; x += 10) {
+        for (let y = 0; y < canvas.height; y += 10) {
+          ctx.fillStyle = `rgb(${x % 255}, ${y % 255}, ${(x + y) % 255})`;
+          ctx.fillRect(x, y, 10, 10);
+        }
+      }
+    </script>
+  </body>
+</html>

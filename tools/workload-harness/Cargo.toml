@@ -1,0 +1,10 @@
+[package]
+name = "webox-workload-harness"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+webox-config = { path = "../../crates/config" }
+webox-runtime-api = { path = "../../crates/runtime-api" }
+webox-memory = { path = "../../crates/memory" }

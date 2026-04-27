@@ -1,0 +1,58 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import WorkloadExplorer from "../components/WorkloadExplorer";
+import { brand } from "@webox/brand";
+import { workloadProfiles } from "@webox/contracts";
+---
+
+<BaseLayout title="webox | high-memory browser">
+  <section class="hero">
+    <div class="hero-copy">
+      <div class="eyebrow">High-memory browsing</div>
+      <h1>{brand.name} pushes browser tabs past ordinary limits.</h1>
+      <p>{brand.tagline}</p>
+      <p class="callout">
+        Designed for CAD apps, large dashboards, Unity WebGL, and WASM-heavy workloads that hit memory ceilings in mainstream browsers.
+      </p>
+      <div class="button-row">
+        <a class="button-link primary" href="/docs/architecture">See the architecture</a>
+        <a class="button-link" href="/docs/getting-started">Developer onboarding</a>
+      </div>
+    </div>
+    <div class="panel stack">
+      <div>
+        <div class="eyebrow">Performance target</div>
+        <h2>8 GiB minimum per tab</h2>
+      </div>
+      <div class="metric-grid">
+        <div class="metric">
+          <strong>Rust</strong>
+          <span>Host shell and runtime orchestration</span>
+        </div>
+        <div class="metric">
+          <strong>CEF</strong>
+          <span>Chromium-class rendering baseline</span>
+        </div>
+        <div class="metric">
+          <strong>Astro</strong>
+          <span>Docs and marketing site shell</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="grid" style={{ margin: "24px 0" }}>
+    <article class="panel">
+      <div class="eyebrow">Compatibility first</div>
+      <h2>Chromium-class support, Rust host control</h2>
+      <p>webox uses a Rust shell around Chromium embedding so memory policy and observability can evolve without reinventing the web platform.</p>
+    </article>
+    <article class="panel">
+      <div class="eyebrow">Monorepo ready</div>
+      <h2>Browser, engine, packages, and site in one workspace</h2>
+      <p>The repo keeps product, runtime, shared contracts, and docs close together so architecture and onboarding stay aligned.</p>
+    </article>
+  </section>
+
+  <WorkloadExplorer workloads={workloadProfiles} client:load />
+</BaseLayout>

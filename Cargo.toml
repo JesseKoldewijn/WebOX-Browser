@@ -1,0 +1,17 @@
+[workspace]
+members = [
+  "apps/browser",
+  "crates/config",
+  "crates/engine",
+  "crates/memory",
+  "crates/runtime-api",
+  "crates/shell",
+  "crates/ui",
+  "tools/workload-harness",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+version = "0.1.0"
