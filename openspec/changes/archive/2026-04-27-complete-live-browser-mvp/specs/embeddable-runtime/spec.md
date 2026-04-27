@@ -1,7 +1,4 @@
-## Purpose
-Define the reusable embeddable runtime surface and how it exposes high-memory behavior to host applications.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Core runtime can be embedded by host applications
 The system SHALL expose a reusable runtime surface that allows host applications to embed Chromium-backed browsing capabilities without depending on the standalone browser UI, and SHALL back those capabilities with live browser instances rather than simulated-only state.

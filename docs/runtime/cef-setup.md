@@ -31,7 +31,12 @@ This creates the expected directory layout so a chosen CEF distribution can be p
 
 ## Current Status
 
-The repository now has a real CEF runtime configuration contract and live browser instance tracking, but it does not vendor or download CEF automatically yet. The current runtime can execute the shell and workload harness against simulated or real-CEF bring-up paths depending on available assets.
+The repository now has a real CEF runtime configuration contract, engine-driven browser instance tracking, and a live browser surface contract for the standalone eframe host, but it does not vendor or download CEF automatically yet. The current runtime can execute the shell and workload harness against simulated or real-CEF bring-up paths depending on available assets.
+
+## Toolchain Baseline
+
+- Rust edition: `2024`
+- Minimum compiler: `rustc 1.85+`
 
 ## Validation Commands
 

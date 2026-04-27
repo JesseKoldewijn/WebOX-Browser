@@ -1,7 +1,4 @@
-## Purpose
-Define high-memory tab targets, telemetry, and mitigation behavior for live browser workloads.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Tabs target high memory headroom on supported systems
 The system SHALL target at least 8 GB of practical memory headroom per tab on supported systems through browser configuration, process orchestration, runtime policy management, and validation against live browser workloads.

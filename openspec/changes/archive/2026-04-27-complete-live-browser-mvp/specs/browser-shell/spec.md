@@ -1,7 +1,4 @@
-## Purpose
-Define the Rust host shell lifecycle responsibilities and command surface for the standalone browser.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Rust host shell manages browser lifecycle
 The system SHALL provide a Rust-based host shell that initializes the browser runtime, manages application lifecycle, coordinates browser windows and tab containers for webox, and keeps browser-window state synchronized with live engine instances.

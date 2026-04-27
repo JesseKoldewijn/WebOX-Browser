@@ -3,7 +3,7 @@ use egui::RichText;
 use webox_config::AppConfig;
 use webox_memory::TabTelemetry;
 use webox_shell::HostShell;
-use webox_ui::{BrowserCommand, BrowserWindowModel, TabViewState};
+use webox_ui::{BrowserCommand, BrowserWindowModel, SurfaceViewState, TabViewState};
 
 struct BrowserApp {
     shell: HostShell,
@@ -30,6 +30,8 @@ impl BrowserApp {
         shell
             .finish_navigation(&window_id, &tab, "webox home")
             .expect("browser should finish initial navigation");
+        let _ = shell.resize_tab_surface(&tab, 1280, 768);
+        let _ = shell.focus_tab_surface(&tab, true);
         let _ = shell.record_tab_telemetry(
             &window_id,
             &TabTelemetry {
@@ -44,7 +46,7 @@ impl BrowserApp {
             shell,
             window_id,
             address_input: home_page,
-            last_status: "CEF bootstrap configured; browser running through native host shell"
+            last_status: "CEF bootstrap configured; live browser shell running through engine-backed tab state"
                 .to_string(),
             window_title: "webox - ready".to_string(),
         }
@@ -72,11 +74,15 @@ impl BrowserApp {
         self.active_tab().map(|tab| tab.id.clone())
     }
 
+    fn active_surface(&self) -> Option<&SurfaceViewState> {
+        self.active_tab().map(|tab| &tab.surface)
+    }
+
     fn go_back_active(&mut self) {
         if let Some(tab_id) = self.active_tab_id() {
             self.dispatch(BrowserCommand::Back { tab_id });
             self.sync_address_from_active_tab();
-            self.last_status = "Went back".to_string();
+            self.last_status = "Went back using live engine history".to_string();
         }
     }
 
@@ -84,14 +90,14 @@ impl BrowserApp {
         if let Some(tab_id) = self.active_tab_id() {
             self.dispatch(BrowserCommand::Forward { tab_id });
             self.sync_address_from_active_tab();
-            self.last_status = "Went forward".to_string();
+            self.last_status = "Went forward using live engine history".to_string();
         }
     }
 
     fn reload_active(&mut self) {
         if let Some(tab_id) = self.active_tab_id() {
             self.dispatch(BrowserCommand::Reload { tab_id });
-            self.last_status = "Reload requested".to_string();
+            self.last_status = "Reload requested through live engine instance".to_string();
         }
     }
 
@@ -140,8 +146,9 @@ impl BrowserApp {
                 let _ = self
                     .shell
                     .finish_navigation(&self.window_id, &tab, "Example");
+                let _ = self.shell.resize_tab_surface(&tab, 1280, 768);
                 self.sync_address_from_active_tab();
-                self.last_status = format!("Opened tab {tab}");
+                self.last_status = format!("Opened live tab {tab}");
             }
             Err(error) => {
                 self.last_status = error;
@@ -162,7 +169,7 @@ impl BrowserApp {
         });
         self.sync_address_from_active_tab();
         self.last_status = if closing_active {
-            format!("Closed active tab {tab_id}")
+            format!("Closed active live tab {tab_id}")
         } else {
             format!("Closed tab {tab_id}")
         };
@@ -171,6 +178,16 @@ impl BrowserApp {
     fn stop_app(&mut self, ctx: &egui::Context) {
         self.last_status = "Window close requested".to_string();
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    fn sync_active_surface_metrics(&mut self, ui: &egui::Ui) {
+        if let Some(tab_id) = self.active_tab_id() {
+            let available = ui.available_size();
+            let width = available.x.max(320.0) as u32;
+            let height = available.y.max(180.0) as u32;
+            let _ = self.shell.resize_tab_surface(&tab_id, width, height);
+            let _ = self.shell.focus_tab_surface(&tab_id, true);
+        }
     }
 
     fn render_chrome_toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -290,6 +307,68 @@ impl BrowserApp {
                 });
             });
     }
+
+    fn render_live_surface(&mut self, ui: &mut egui::Ui) {
+        self.sync_active_surface_metrics(ui);
+
+        if let Some(tab) = self.active_tab().cloned() {
+            let surface = tab.surface;
+            let frame_color = if tab.failure_state.is_some() {
+                egui::Color32::from_rgb(70, 24, 24)
+            } else if tab.is_loading {
+                egui::Color32::from_rgb(36, 52, 76)
+            } else {
+                egui::Color32::from_rgb(30, 45, 40)
+            };
+
+            egui::Frame::group(ui.style())
+                .fill(frame_color)
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(90)))
+                .show(ui, |ui| {
+                    ui.set_min_size(egui::vec2(
+                        surface.width as f32,
+                        (surface.height as f32).min(360.0),
+                    ));
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(12.0);
+                        ui.label(
+                            RichText::new("Live Browser Surface")
+                                .strong()
+                                .size(18.0)
+                                .color(egui::Color32::WHITE),
+                        );
+                        ui.label(
+                            RichText::new(&surface.frame_label)
+                                .monospace()
+                                .color(egui::Color32::from_rgb(220, 228, 224)),
+                        );
+                        ui.add_space(8.0);
+                        ui.label(
+                            RichText::new(format!(
+                                "surface={}  frame={}  size={}x{}  focused={}",
+                                surface.surface_id,
+                                surface.frame_token,
+                                surface.width,
+                                surface.height,
+                                surface.focused
+                            ))
+                            .monospace()
+                            .color(egui::Color32::from_rgb(190, 210, 206)),
+                        );
+                        ui.add_space(8.0);
+                        ui.label(
+                            RichText::new("This panel now reflects engine-driven live surface state and resizing hooks for embedded CEF rendering.")
+                                .color(egui::Color32::from_rgb(225, 235, 233)),
+                        );
+                        if let Some(failure) = &tab.failure_state {
+                            ui.add_space(8.0);
+                            ui.colored_label(egui::Color32::from_rgb(255, 190, 190), failure);
+                        }
+                        ui.add_space(12.0);
+                    });
+                });
+        }
+    }
 }
 
 impl Drop for BrowserApp {
@@ -318,7 +397,7 @@ impl eframe::App for BrowserApp {
         });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            if let Some(tab) = self.active_tab() {
+            if let Some(tab) = self.active_tab().cloned() {
                 ui.heading(RichText::new(&tab.title).strong());
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new("Current URL:").strong());
@@ -334,19 +413,15 @@ impl eframe::App for BrowserApp {
                         format!("Memory: {memory_indicator}"),
                     );
                 }
+                if let Some(attribution) = &tab.memory_attribution {
+                    ui.label(format!("Memory attribution: {attribution}"));
+                }
                 if let Some(failure_state) = &tab.failure_state {
                     ui.colored_label(egui::Color32::from_rgb(180, 30, 30), failure_state);
                 }
+                ui.label(format!("Status: {}", tab.status_text));
                 ui.separator();
-                ui.group(|ui| {
-                    ui.label(RichText::new("Browser Surface").strong());
-                    ui.label(
-                        "Real native browser chrome host is wired through eframe/egui with visible navigation, tabs, and window controls.",
-                    );
-                    ui.label(
-                        "CEF bootstrap is configured in the engine crate; embedded live page rendering is the next integration layer.",
-                    );
-                });
+                self.render_live_surface(ui);
             } else {
                 ui.heading("No active tab");
                 ui.label("Open a new tab to begin browsing.");
@@ -365,6 +440,10 @@ impl eframe::App for BrowserApp {
                 if let Some(tab) = self.active_tab() {
                     ui.separator();
                     ui.label(format!("Active tab: {}", tab.id));
+                }
+                if let Some(surface) = self.active_surface() {
+                    ui.separator();
+                    ui.label(format!("Surface frame: {}", surface.frame_token));
                 }
             });
         });
@@ -441,5 +520,15 @@ mod tests {
             app.active_tab().map(|tab| tab.url.as_str()),
             Some("https://example.com/two")
         );
+    }
+
+    #[test]
+    fn browser_surface_reflects_engine_metrics() {
+        let app = BrowserApp::from_config(AppConfig::simulated());
+        let tab = app.active_tab().expect("initial tab should exist");
+        assert!(tab.surface.frame_token > 0);
+        assert!(tab.surface.width >= 1280);
+        assert!(tab.status_text.contains("Observed memory state"));
+        assert!(tab.memory_attribution.is_some());
     }
 }

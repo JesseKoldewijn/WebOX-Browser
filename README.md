@@ -13,10 +13,11 @@ webox is a monorepo for a high-memory browser initiative that targets Chromium-c
 
 ## Development
 
+- Rust toolchain baseline: `rustc 1.85+` with workspace edition `2024`
 - `cargo test` - run Rust unit tests and smoke tests
-- `cargo run -p webox-browser-app` - run the browser shell prototype
-- `cargo run -p webox-workload-harness -- supported` - run the supported-system workload harness
-- `cargo run -p webox-workload-harness -- constrained` - run the constrained-system workload harness
+- `cargo run -p webox-browser-app` - run the browser shell with engine-driven live tab and surface state
+- `cargo run -p webox-workload-harness -- supported` - run the supported-system live workload harness
+- `cargo run -p webox-workload-harness -- constrained` - run the constrained-system live workload harness
 - `bun install` - install Astro, SolidJS, and workspace packages
 - `bun run docs:dev` - run the docs site locally
 - `bun run dev -- docs` - launch a specific workspace dev surface through the root helper

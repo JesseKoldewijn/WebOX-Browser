@@ -2,6 +2,16 @@ pub type WindowId = String;
 pub type TabId = String;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SurfaceViewState {
+    pub surface_id: String,
+    pub width: u32,
+    pub height: u32,
+    pub focused: bool,
+    pub frame_token: u64,
+    pub frame_label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TabViewState {
     pub id: TabId,
     pub title: String,
@@ -9,8 +19,9 @@ pub struct TabViewState {
     pub is_loading: bool,
     pub memory_indicator: Option<String>,
     pub failure_state: Option<String>,
-    history: Vec<String>,
-    history_index: usize,
+    pub memory_attribution: Option<String>,
+    pub status_text: String,
+    pub surface: SurfaceViewState,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,8 +61,16 @@ impl BrowserWindowModel {
             is_loading: true,
             memory_indicator: None,
             failure_state: None,
-            history: vec![url],
-            history_index: 0,
+            memory_attribution: None,
+            status_text: format!("Preparing {url}"),
+            surface: SurfaceViewState {
+                surface_id: format!("surface-{tab_id}"),
+                width: 1280,
+                height: 720,
+                focused: false,
+                frame_token: 0,
+                frame_label: format!("Preparing {url}"),
+            },
         });
         self.active_tab_id = Some(tab_id.clone());
         tab_id
@@ -61,22 +80,8 @@ impl BrowserWindowModel {
         if self.tabs.iter().any(|tab| tab.id == tab_id) {
             self.active_tab_id = Some(tab_id.to_string());
         }
-    }
-
-    pub fn navigate_tab(&mut self, tab_id: &str, url: &str) {
-        if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) {
-            tab.url = url.to_string();
-            tab.is_loading = true;
-            tab.history.truncate(tab.history_index + 1);
-            tab.history.push(url.to_string());
-            tab.history_index = tab.history.len() - 1;
-        }
-    }
-
-    pub fn finish_loading(&mut self, tab_id: &str, title: &str) {
-        if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) {
-            tab.is_loading = false;
-            tab.title = title.to_string();
+        for tab in &mut self.tabs {
+            tab.surface.focused = tab.id == tab_id;
         }
     }
 
@@ -99,29 +104,29 @@ impl BrowserWindowModel {
                 .filter(|active_tab_id| self.tabs.iter().any(|tab| &tab.id == active_tab_id))
                 .or_else(|| self.tabs.last().map(|tab| tab.id.clone()))
         };
-    }
 
-    pub fn go_back(&mut self, tab_id: &str) {
-        if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) {
-            if tab.history_index > 0 {
-                tab.history_index -= 1;
-                tab.url = tab.history[tab.history_index].clone();
-            }
+        if let Some(active_id) = self.active_tab_id.clone() {
+            self.set_active_tab(&active_id);
         }
     }
 
-    pub fn go_forward(&mut self, tab_id: &str) {
-        if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) {
-            if tab.history_index + 1 < tab.history.len() {
-                tab.history_index += 1;
-                tab.url = tab.history[tab.history_index].clone();
-            }
+    pub fn update_from_engine(&mut self, next: TabViewState) {
+        if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == next.id) {
+            *tab = next;
+        } else {
+            self.tabs.push(next);
         }
     }
 
-    pub fn set_memory_indicator(&mut self, tab_id: &str, memory_indicator: Option<String>) {
+    pub fn set_memory_indicator(
+        &mut self,
+        tab_id: &str,
+        memory_indicator: Option<String>,
+        attribution: Option<String>,
+    ) {
         if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) {
             tab.memory_indicator = memory_indicator;
+            tab.memory_attribution = attribution;
         }
     }
 
@@ -130,19 +135,49 @@ impl BrowserWindowModel {
             tab.failure_state = message;
         }
     }
+
+    pub fn set_surface_size(&mut self, tab_id: &str, width: u32, height: u32) {
+        if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+            tab.surface.width = width;
+            tab.surface.height = height;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::BrowserWindowModel;
+    use super::{BrowserWindowModel, SurfaceViewState, TabViewState};
+
+    fn updated_tab(id: &str) -> TabViewState {
+        TabViewState {
+            id: id.to_string(),
+            title: "Updated".to_string(),
+            url: "https://example.com/updated".to_string(),
+            is_loading: false,
+            memory_indicator: Some("memory warning".to_string()),
+            failure_state: None,
+            memory_attribution: Some("observed renderer metrics".to_string()),
+            status_text: "Loaded updated page".to_string(),
+            surface: SurfaceViewState {
+                surface_id: format!("surface-{id}"),
+                width: 1440,
+                height: 900,
+                focused: true,
+                frame_token: 3,
+                frame_label: "Updated frame".to_string(),
+            },
+        }
+    }
 
     #[test]
     fn browser_window_tracks_active_tab() {
         let mut window = BrowserWindowModel::new("window-1");
         let tab = window.add_tab("tab-1", "https://webox.dev");
-        window.finish_loading(&tab, "webox");
+        window.update_from_engine(updated_tab(&tab));
+        window.set_active_tab(&tab);
         assert_eq!(window.active_tab_id.as_deref(), Some("tab-1"));
-        assert_eq!(window.tabs[0].title, "webox");
+        assert_eq!(window.tabs[0].title, "Updated");
+        assert!(window.tabs[0].surface.focused);
     }
 
     #[test]

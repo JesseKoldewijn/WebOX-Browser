@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use webox_config::AppConfig;
 use webox_engine::{
-    BrowserInstanceDescriptor, BrowserInstanceState, StartupDiagnostics, WeboxEngine,
+    BrowserInstanceDescriptor, BrowserInstanceEvent, BrowserInstanceState, StartupDiagnostics,
+    WeboxEngine,
 };
 use webox_memory::{
     MemoryController, MemoryEvent, PolicyDecision, SupportedSystemReport, TabTelemetry,
@@ -24,6 +25,7 @@ pub struct EmbeddedRuntime {
     initialized: bool,
     observer: Option<Arc<dyn MemoryEventObserver>>,
     startup_diagnostics: Vec<StartupDiagnostics>,
+    latest_events: Vec<BrowserInstanceEvent>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,6 +47,7 @@ impl EmbeddedRuntime {
             initialized: true,
             observer: None,
             startup_diagnostics: vec![startup],
+            latest_events: Vec::new(),
         }
     }
 
@@ -56,27 +59,57 @@ impl EmbeddedRuntime {
         &mut self,
         initial_url: &str,
     ) -> Result<BrowserInstanceDescriptor, String> {
-        self.engine
+        let descriptor = self
+            .engine
             .create_browser_instance(initial_url)
-            .map_err(|error| error.message)
+            .map_err(|error| error.message)?;
+        self.capture_engine_events();
+        Ok(descriptor)
     }
 
     pub fn navigate_browser_instance(&mut self, browser_id: &str, url: &str) -> Result<(), String> {
         self.engine
             .navigate_browser_instance(browser_id, url)
-            .map_err(|error| error.message)
+            .map_err(|error| error.message)?;
+        self.capture_engine_events();
+        Ok(())
     }
 
     pub fn finish_navigation(&mut self, browser_id: &str, title: &str) -> Result<(), String> {
         self.engine
             .finish_navigation(browser_id, title)
-            .map_err(|error| error.message)
+            .map_err(|error| error.message)?;
+        self.capture_engine_events();
+        Ok(())
+    }
+
+    pub fn fail_navigation(&mut self, browser_id: &str, message: &str) -> Result<(), String> {
+        self.engine
+            .fail_navigation(browser_id, message)
+            .map_err(|error| error.message)?;
+        self.capture_engine_events();
+        Ok(())
     }
 
     pub fn close_browser_instance(&mut self, browser_id: &str) -> Result<(), String> {
         self.engine
             .close_browser_instance(browser_id)
-            .map_err(|error| error.message)
+            .map_err(|error| error.message)?;
+        self.capture_engine_events();
+        Ok(())
+    }
+
+    pub fn resize_browser_surface(
+        &mut self,
+        browser_id: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
+        self.engine
+            .resize_browser_surface(browser_id, width, height)
+            .map_err(|error| error.message)?;
+        self.capture_engine_events();
+        Ok(())
     }
 
     pub fn apply_memory_sample(
@@ -111,8 +144,19 @@ impl EmbeddedRuntime {
                 } else {
                     None
                 },
+                Some(
+                    if matches!(
+                        decision.event.level,
+                        webox_memory::MemoryPressureLevel::Exhausted
+                    ) {
+                        "fallback: aggregated browser process metrics".to_string()
+                    } else {
+                        "observed: renderer/browser/gpu telemetry".to_string()
+                    },
+                ),
             )
             .map_err(|error| error.message)?;
+        self.capture_engine_events();
 
         let browser = self
             .engine
@@ -136,6 +180,10 @@ impl EmbeddedRuntime {
         self.engine.browser_instances()
     }
 
+    pub fn drain_events(&mut self) -> Vec<BrowserInstanceEvent> {
+        self.latest_events.drain(..).collect()
+    }
+
     #[must_use]
     pub fn system_report(&self, available_memory_bytes: u64) -> SupportedSystemReport {
         self.memory_controller.system_report(available_memory_bytes)
@@ -149,6 +197,10 @@ impl EmbeddedRuntime {
     #[must_use]
     pub fn is_initialized(&self) -> bool {
         self.initialized
+    }
+
+    fn capture_engine_events(&mut self) {
+        self.latest_events.extend(self.engine.drain_events());
     }
 }
 
@@ -184,6 +236,9 @@ mod tests {
         runtime
             .finish_navigation(&instance.id, "Heavy App")
             .unwrap();
+        runtime
+            .resize_browser_surface(&instance.id, 1600, 900)
+            .unwrap();
         let snapshot = runtime
             .apply_memory_sample(&TabTelemetry {
                 tab_id: instance.id.clone(),
@@ -196,5 +251,7 @@ mod tests {
         assert_eq!(snapshot.browser.title, "Heavy App");
         assert_eq!(snapshot.browser.url, "https://example.com/heavy");
         assert_eq!(snapshot.policy_decision.event.tab_id, instance.id);
+        assert_eq!(snapshot.browser.surface.width, 1600);
+        assert!(!runtime.drain_events().is_empty());
     }
 }

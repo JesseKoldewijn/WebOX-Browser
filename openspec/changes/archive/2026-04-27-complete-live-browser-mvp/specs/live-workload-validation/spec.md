@@ -1,7 +1,4 @@
-## Purpose
-Define live validation coverage for representative heavy browser workloads and the diagnostics captured during execution.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Browser executes representative heavy workloads in a live validation harness
 The system SHALL provide a validation harness that runs representative heavy workloads inside the real embedded browser, including large data visualization, Unity WebGL, WASM-heavy tools, and modern web application scenarios.

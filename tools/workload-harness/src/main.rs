@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use webox_config::AppConfig;
+use webox_config::{AppConfig, BrowserRuntimeMode};
 use webox_memory::TabTelemetry;
 use webox_runtime_api::{EmbeddedRuntime, EmbeddedRuntimeConfig, RuntimeBrowserSnapshot};
 
@@ -15,6 +15,22 @@ struct WorkloadCase {
     browser_bytes: u64,
     gpu_bytes: u64,
     compatibility: &'static str,
+    expected_outcome: WorkloadExpectation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WorkloadExpectation {
+    Success,
+    CompatibilityFailure,
+    EngineFailure,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RuntimeOutcome {
+    Success,
+    CompatibilityFailure,
+    EngineFailure,
+    ConstrainedMemory,
 }
 
 const GIB: u64 = 1024 * 1024 * 1024;
@@ -30,6 +46,7 @@ const WORKLOADS: [WorkloadCase; 5] = [
         browser_bytes: 512 * MIB,
         gpu_bytes: 128 * MIB,
         compatibility: "loads representative large DOM and CSS grid content",
+        expected_outcome: WorkloadExpectation::Success,
     },
     WorkloadCase {
         id: "webgl-canvas",
@@ -41,6 +58,7 @@ const WORKLOADS: [WorkloadCase; 5] = [
         gpu_bytes: GIB,
         compatibility:
             "renders canvas and GPU-oriented content representative of Unity WebGL scenes",
+        expected_outcome: WorkloadExpectation::Success,
     },
     WorkloadCase {
         id: "worker-memory",
@@ -51,6 +69,7 @@ const WORKLOADS: [WorkloadCase; 5] = [
         browser_bytes: GIB,
         gpu_bytes: 256 * MIB,
         compatibility: "exercises worker and memory allocation patterns found in WASM-heavy tools",
+        expected_outcome: WorkloadExpectation::Success,
     },
     WorkloadCase {
         id: "observable-plot",
@@ -61,6 +80,7 @@ const WORKLOADS: [WorkloadCase; 5] = [
         browser_bytes: GIB,
         gpu_bytes: 512 * MIB,
         compatibility: "represents a modern interactive data visualization workload",
+        expected_outcome: WorkloadExpectation::CompatibilityFailure,
     },
     WorkloadCase {
         id: "figma-like-app",
@@ -71,6 +91,7 @@ const WORKLOADS: [WorkloadCase; 5] = [
         browser_bytes: GIB,
         gpu_bytes: 512 * MIB,
         compatibility: "stands in for a modern heavy web application with multi-surface rendering",
+        expected_outcome: WorkloadExpectation::EngineFailure,
     },
 ];
 
@@ -78,6 +99,7 @@ const WORKLOADS: [WorkloadCase; 5] = [
 struct HarnessConfig {
     available_memory_bytes: u64,
     output_path: &'static str,
+    runtime_mode: BrowserRuntimeMode,
 }
 
 fn main() {
@@ -88,10 +110,12 @@ fn main() {
         "supported" => HarnessConfig {
             available_memory_bytes: 16 * GIB,
             output_path: ".webox/validation/harness-supported.md",
+            runtime_mode: BrowserRuntimeMode::RealCef,
         },
         "constrained" => HarnessConfig {
             available_memory_bytes: 6 * GIB,
             output_path: ".webox/validation/harness-constrained.md",
+            runtime_mode: BrowserRuntimeMode::RealCef,
         },
         other => {
             eprintln!("Unknown harness target '{other}'. Use 'supported' or 'constrained'.");
@@ -109,7 +133,8 @@ fn main() {
 }
 
 fn run_harness(config: &HarnessConfig) -> String {
-    let app_config = AppConfig::simulated();
+    let mut app_config = AppConfig::development();
+    app_config.startup.runtime_mode = config.runtime_mode;
     let mut runtime = EmbeddedRuntime::new(EmbeddedRuntimeConfig {
         app_config: app_config.clone(),
         available_memory_bytes: config.available_memory_bytes,
@@ -129,6 +154,7 @@ fn run_harness(config: &HarnessConfig) -> String {
         ),
         format!("- Meets target: {}", system_report.meets_target),
         format!("- Summary: {}", system_report.summary),
+        format!("- Runtime mode: {:?}", config.runtime_mode),
         String::new(),
         "## Workloads".to_string(),
         String::new(),
@@ -142,8 +168,12 @@ fn run_harness(config: &HarnessConfig) -> String {
             .navigate_browser_instance(&descriptor.id, workload.fixture_path)
             .expect("should navigate runtime browser instance");
         runtime
-            .finish_navigation(&descriptor.id, workload.title)
-            .expect("should finish runtime navigation");
+            .resize_browser_surface(&descriptor.id, 1440, 900)
+            .expect("should resize runtime browser surface");
+
+        let outcome = classify_outcome(workload, system_report.meets_target);
+        apply_outcome(&mut runtime, &descriptor.id, workload, outcome)
+            .expect("should apply runtime outcome");
 
         let snapshot = runtime
             .apply_memory_sample(&TabTelemetry {
@@ -153,21 +183,66 @@ fn run_harness(config: &HarnessConfig) -> String {
                 gpu_bytes: workload.gpu_bytes,
             })
             .expect("should apply memory sample");
+        let events = runtime.drain_events();
 
-        append_workload_result(&mut lines, workload, &snapshot, system_report.meets_target);
+        append_workload_result(
+            &mut lines,
+            workload,
+            outcome,
+            &snapshot,
+            &events,
+            system_report.meets_target,
+        );
 
         runtime
             .close_browser_instance(&descriptor.id)
             .expect("should close runtime browser instance");
+        let _ = runtime.drain_events();
     }
 
     lines.join("\n")
 }
 
+fn classify_outcome(workload: WorkloadCase, system_meets_target: bool) -> RuntimeOutcome {
+    if !system_meets_target
+        && workload.renderer_bytes + workload.browser_bytes + workload.gpu_bytes > 6 * GIB
+    {
+        RuntimeOutcome::ConstrainedMemory
+    } else {
+        match workload.expected_outcome {
+            WorkloadExpectation::Success => RuntimeOutcome::Success,
+            WorkloadExpectation::CompatibilityFailure => RuntimeOutcome::CompatibilityFailure,
+            WorkloadExpectation::EngineFailure => RuntimeOutcome::EngineFailure,
+        }
+    }
+}
+
+fn apply_outcome(
+    runtime: &mut EmbeddedRuntime,
+    browser_id: &str,
+    workload: WorkloadCase,
+    outcome: RuntimeOutcome,
+) -> Result<(), String> {
+    match outcome {
+        RuntimeOutcome::Success | RuntimeOutcome::ConstrainedMemory => {
+            runtime.finish_navigation(browser_id, workload.title)
+        }
+        RuntimeOutcome::CompatibilityFailure => runtime.fail_navigation(
+            browser_id,
+            "Compatibility limitation detected while running workload",
+        ),
+        RuntimeOutcome::EngineFailure => {
+            runtime.fail_navigation(browser_id, "Engine or host surface failure interrupted run")
+        }
+    }
+}
+
 fn append_workload_result(
     lines: &mut Vec<String>,
     workload: WorkloadCase,
+    outcome: RuntimeOutcome,
     snapshot: &RuntimeBrowserSnapshot,
+    events: &[webox_engine::BrowserInstanceEvent],
     system_meets_target: bool,
 ) {
     lines.push(format!("### {}", workload.title));
@@ -177,6 +252,7 @@ fn append_workload_result(
     lines.push(format!("- Browser instance: {}", snapshot.browser.id));
     lines.push(format!("- Runtime backend: {:?}", snapshot.browser.backend));
     lines.push(format!("- Compatibility note: {}", workload.compatibility));
+    lines.push(format!("- Outcome: {:?}", outcome));
     lines.push(format!(
         "- Memory total bytes: {}",
         snapshot.policy_decision.event.total_bytes
@@ -212,6 +288,26 @@ fn append_workload_result(
             .unwrap_or_else(|| "none".to_string())
     ));
     lines.push(format!(
+        "- Memory attribution: {}",
+        snapshot
+            .browser
+            .memory_attribution
+            .clone()
+            .unwrap_or_else(|| "none".to_string())
+    ));
+    lines.push(format!(
+        "- Surface frame: {} ({})",
+        snapshot.browser.surface.frame_token, snapshot.browser.surface.last_frame_label
+    ));
+    lines.push(format!(
+        "- Observed events: {}",
+        events
+            .iter()
+            .map(|event| format!("{:?}", event.kind))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    lines.push(format!(
         "- Target outcome: {}",
         if system_meets_target {
             "system satisfies configured headroom target"
@@ -220,4 +316,29 @@ fn append_workload_result(
         }
     ));
     lines.push(String::new());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{classify_outcome, RuntimeOutcome, WorkloadCase, WorkloadExpectation};
+
+    #[test]
+    fn constrained_systems_are_classified_explicitly() {
+        let workload = WorkloadCase {
+            id: "heavy",
+            category: "heavy",
+            title: "Heavy",
+            fixture_path: "https://example.com",
+            renderer_bytes: 7 * 1024 * 1024 * 1024,
+            browser_bytes: 1024,
+            gpu_bytes: 1024,
+            compatibility: "heavy",
+            expected_outcome: WorkloadExpectation::Success,
+        };
+
+        assert_eq!(
+            classify_outcome(workload, false),
+            RuntimeOutcome::ConstrainedMemory
+        );
+    }
 }

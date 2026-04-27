@@ -1,7 +1,4 @@
-## Purpose
-Define the Chromium-class engine expectations and runtime configuration behavior for the embedded browser.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Embedded engine provides Chromium-class web compatibility
 The system SHALL embed Chromium through CEF so that webox renders and executes modern web content with compatibility expectations aligned with Chromium for JavaScript, HTML, CSS, DOM, media, networking, storage, canvas, WebGL, and WebAssembly through live browser instances.

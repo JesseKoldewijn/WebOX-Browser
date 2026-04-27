@@ -21,4 +21,5 @@ This note records the intended interpretation of live workload execution once th
 - Total memory bytes at the point of escalation
 - Human-readable indicator shown in the UI
 - Failure state text for suspected memory exhaustion
+- Memory attribution detail showing whether the result came from observed telemetry or fallback aggregated metrics
 - Harness category and workload source for correlation

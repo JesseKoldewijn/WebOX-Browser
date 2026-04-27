@@ -4185,6 +4185,7 @@ name = "webox-workload-harness"
 version = "0.1.0"
 dependencies = [
  "webox-config",
+ "webox-engine",
  "webox-memory",
  "webox-runtime-api",
 ]

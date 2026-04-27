@@ -6,5 +6,6 @@ version.workspace = true
 
 [dependencies]
 webox-config = { path = "../../crates/config" }
+webox-engine = { path = "../../crates/engine" }
 webox-runtime-api = { path = "../../crates/runtime-api" }
 webox-memory = { path = "../../crates/memory" }

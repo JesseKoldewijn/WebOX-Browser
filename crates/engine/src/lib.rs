@@ -44,6 +44,29 @@ pub struct EngineLaunchSettings {
     pub runtime_mode: BrowserRuntimeMode,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeBackend {
+    Simulated,
+    Cef,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrowserSurfaceRenderMode {
+    Placeholder,
+    CefOffscreen,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BrowserSurfaceState {
+    pub surface_id: String,
+    pub render_mode: BrowserSurfaceRenderMode,
+    pub width: u32,
+    pub height: u32,
+    pub focused: bool,
+    pub frame_token: u64,
+    pub last_frame_label: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BrowserInstanceDescriptor {
     pub id: String,
@@ -51,6 +74,7 @@ pub struct BrowserInstanceDescriptor {
     pub title: String,
     pub is_loading: bool,
     pub backend: RuntimeBackend,
+    pub surface: BrowserSurfaceState,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,17 +87,39 @@ pub struct BrowserInstanceState {
     pub memory_usage_bytes: u64,
     pub memory_indicator: Option<String>,
     pub failure_state: Option<String>,
+    pub memory_attribution: Option<String>,
+    pub surface: BrowserSurfaceState,
+    pub history: Vec<String>,
+    pub history_index: usize,
+    pub status_text: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrowserInstanceEventKind {
+    Created,
+    LoadStarted,
+    LoadFinished,
+    NavigationFailed,
+    HistoryChanged,
+    TitleChanged,
+    SurfaceUpdated,
+    FocusChanged,
+    MemoryUpdated,
+    Crashed,
+    Closed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BrowserInstanceEvent {
+    pub browser_id: String,
+    pub kind: BrowserInstanceEventKind,
+    pub summary: String,
+    pub snapshot: Option<BrowserInstanceState>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EngineError {
     pub message: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RuntimeBackend {
-    Simulated,
-    Cef,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -154,6 +200,7 @@ pub struct WeboxEngine {
     next_browser_instance: usize,
     runtime_backend: RuntimeBackend,
     browser_instances: HashMap<String, BrowserInstanceState>,
+    pending_events: Vec<BrowserInstanceEvent>,
 }
 
 impl WeboxEngine {
@@ -178,6 +225,7 @@ impl WeboxEngine {
                 RuntimeBackend::Simulated
             },
             browser_instances: HashMap::new(),
+            pending_events: Vec::new(),
         }
     }
 
@@ -254,6 +302,15 @@ impl WeboxEngine {
     }
 
     pub fn shutdown(&mut self) -> StartupDiagnostics {
+        let open_ids = self.browser_instances.keys().cloned().collect::<Vec<_>>();
+        for browser_id in open_ids {
+            self.push_event(
+                &browser_id,
+                BrowserInstanceEventKind::Closed,
+                format!("Browser instance '{browser_id}' closed during engine shutdown"),
+            );
+        }
+        self.browser_instances.clear();
         self.state = EngineState::Stopped;
         if matches!(self.runtime_backend, RuntimeBackend::Cef) {
             cef::shutdown();
@@ -279,34 +336,63 @@ impl WeboxEngine {
             });
         }
 
+        let browser_id = format!("browser-instance-{}", self.next_browser_instance);
+        let surface_id = format!("browser-surface-{}", self.next_browser_instance);
+        self.next_browser_instance += 1;
+
+        let surface = BrowserSurfaceState {
+            surface_id,
+            render_mode: match self.runtime_backend {
+                RuntimeBackend::Cef => BrowserSurfaceRenderMode::CefOffscreen,
+                RuntimeBackend::Simulated => BrowserSurfaceRenderMode::Placeholder,
+            },
+            width: 1280,
+            height: 720,
+            focused: false,
+            frame_token: 1,
+            last_frame_label: format!("Preparing {initial_url}"),
+        };
+
         let descriptor = BrowserInstanceDescriptor {
-            id: format!("browser-instance-{}", self.next_browser_instance),
+            id: browser_id.clone(),
             initial_url: initial_url.to_string(),
             title: "Loading...".to_string(),
             is_loading: true,
             backend: self.runtime_backend,
+            surface: surface.clone(),
         };
-        self.next_browser_instance += 1;
+
         self.browser_instances.insert(
-            descriptor.id.clone(),
+            browser_id.clone(),
             BrowserInstanceState {
-                id: descriptor.id.clone(),
-                url: descriptor.initial_url.clone(),
+                id: browser_id.clone(),
+                url: initial_url.to_string(),
                 title: descriptor.title.clone(),
                 is_loading: descriptor.is_loading,
                 backend: descriptor.backend,
                 memory_usage_bytes: 0,
                 memory_indicator: None,
                 failure_state: None,
+                memory_attribution: None,
+                surface,
+                history: vec![initial_url.to_string()],
+                history_index: 0,
+                status_text: format!("Created live browser instance for {initial_url}"),
             },
         );
+
         self.diagnostics.push(StartupDiagnostics {
             component: "engine.browser-instance",
             detail: format!(
                 "Prepared {:?} browser initialization flow for '{}' as {}",
-                self.runtime_backend, descriptor.initial_url, descriptor.id
+                self.runtime_backend, initial_url, browser_id
             ),
         });
+        self.push_event(
+            &browser_id,
+            BrowserInstanceEventKind::Created,
+            format!("Created browser instance '{browser_id}'"),
+        );
         Ok(descriptor)
     }
 
@@ -315,35 +401,53 @@ impl WeboxEngine {
         browser_id: &str,
         url: &str,
     ) -> Result<(), EngineError> {
-        let instance = self
-            .browser_instances
-            .get_mut(browser_id)
-            .ok_or_else(|| EngineError {
-                message: format!("Browser instance '{}' was not found", browser_id),
-            })?;
-        instance.url = url.to_string();
-        instance.title = "Loading...".to_string();
-        instance.is_loading = true;
-        instance.failure_state = None;
+        let backend = {
+            let instance = self.browser_instance_mut(browser_id)?;
+            instance.url = url.to_string();
+            instance.title = "Loading...".to_string();
+            instance.is_loading = true;
+            instance.failure_state = None;
+            instance.history.truncate(instance.history_index + 1);
+            instance.history.push(url.to_string());
+            instance.history_index = instance.history.len() - 1;
+            instance.status_text = format!("Navigating to {url}");
+            instance.surface.frame_token += 1;
+            instance.surface.last_frame_label = format!("Loading {url}");
+            instance.backend
+        };
         self.diagnostics.push(StartupDiagnostics {
             component: "engine.navigation",
             detail: format!(
                 "Queued {:?} navigation for '{}' to '{}'",
-                instance.backend, browser_id, url
+                backend, browser_id, url
             ),
         });
+        self.push_event(
+            browser_id,
+            BrowserInstanceEventKind::LoadStarted,
+            format!("Navigation started for '{browser_id}' to '{url}'"),
+        );
+        self.push_event(
+            browser_id,
+            BrowserInstanceEventKind::HistoryChanged,
+            format!("History updated for '{browser_id}'"),
+        );
+        self.push_event(
+            browser_id,
+            BrowserInstanceEventKind::SurfaceUpdated,
+            format!("Surface updated for '{browser_id}' after navigation start"),
+        );
         Ok(())
     }
 
     pub fn finish_navigation(&mut self, browser_id: &str, title: &str) -> Result<(), EngineError> {
-        let instance = self
-            .browser_instances
-            .get_mut(browser_id)
-            .ok_or_else(|| EngineError {
-                message: format!("Browser instance '{}' was not found", browser_id),
-            })?;
+        let instance = self.browser_instance_mut(browser_id)?;
         instance.title = title.to_string();
         instance.is_loading = false;
+        instance.failure_state = None;
+        instance.status_text = format!("Loaded {}", instance.url);
+        instance.surface.frame_token += 1;
+        instance.surface.last_frame_label = format!("{title} ({})", instance.url);
         self.diagnostics.push(StartupDiagnostics {
             component: "engine.navigation",
             detail: format!(
@@ -351,6 +455,155 @@ impl WeboxEngine {
                 browser_id, title
             ),
         });
+        self.push_event(
+            browser_id,
+            BrowserInstanceEventKind::TitleChanged,
+            format!("Title updated for '{browser_id}' to '{title}'"),
+        );
+        self.push_event(
+            browser_id,
+            BrowserInstanceEventKind::LoadFinished,
+            format!("Navigation finished for '{browser_id}'"),
+        );
+        self.push_event(
+            browser_id,
+            BrowserInstanceEventKind::SurfaceUpdated,
+            format!("Surface updated for '{browser_id}' after load finished"),
+        );
+        Ok(())
+    }
+
+    pub fn fail_navigation(&mut self, browser_id: &str, message: &str) -> Result<(), EngineError> {
+        let instance = self.browser_instance_mut(browser_id)?;
+        instance.is_loading = false;
+        instance.failure_state = Some(message.to_string());
+        instance.status_text = format!("Navigation failed: {message}");
+        instance.surface.frame_token += 1;
+        instance.surface.last_frame_label = format!("Navigation failed: {message}");
+        self.push_event(
+            browser_id,
+            BrowserInstanceEventKind::NavigationFailed,
+            format!("Navigation failed for '{browser_id}': {message}"),
+        );
+        self.push_event(
+            browser_id,
+            BrowserInstanceEventKind::SurfaceUpdated,
+            format!("Surface updated for '{browser_id}' after navigation failure"),
+        );
+        Ok(())
+    }
+
+    pub fn crash_browser_instance(
+        &mut self,
+        browser_id: &str,
+        message: &str,
+    ) -> Result<(), EngineError> {
+        let instance = self.browser_instance_mut(browser_id)?;
+        instance.is_loading = false;
+        instance.failure_state = Some(message.to_string());
+        instance.status_text = format!("Browser instance crashed: {message}");
+        instance.surface.frame_token += 1;
+        instance.surface.last_frame_label = format!("Crash: {message}");
+        self.push_event(
+            browser_id,
+            BrowserInstanceEventKind::Crashed,
+            format!("Browser instance '{browser_id}' crashed: {message}"),
+        );
+        self.push_event(
+            browser_id,
+            BrowserInstanceEventKind::SurfaceUpdated,
+            format!("Surface updated for '{browser_id}' after crash"),
+        );
+        Ok(())
+    }
+
+    pub fn go_back_browser_instance(&mut self, browser_id: &str) -> Result<(), EngineError> {
+        let instance = self.browser_instance_mut(browser_id)?;
+        if instance.history_index > 0 {
+            instance.history_index -= 1;
+            instance.url = instance.history[instance.history_index].clone();
+            instance.is_loading = false;
+            instance.failure_state = None;
+            instance.title = instance.url.clone();
+            instance.status_text = format!("Went back to {}", instance.url);
+            instance.surface.frame_token += 1;
+            instance.surface.last_frame_label = format!("History: {}", instance.url);
+            self.push_event(
+                browser_id,
+                BrowserInstanceEventKind::HistoryChanged,
+                format!("Browser instance '{browser_id}' moved back in history"),
+            );
+            self.push_event(
+                browser_id,
+                BrowserInstanceEventKind::SurfaceUpdated,
+                format!("Surface updated for '{browser_id}' after back navigation"),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn go_forward_browser_instance(&mut self, browser_id: &str) -> Result<(), EngineError> {
+        let instance = self.browser_instance_mut(browser_id)?;
+        if instance.history_index + 1 < instance.history.len() {
+            instance.history_index += 1;
+            instance.url = instance.history[instance.history_index].clone();
+            instance.is_loading = false;
+            instance.failure_state = None;
+            instance.title = instance.url.clone();
+            instance.status_text = format!("Went forward to {}", instance.url);
+            instance.surface.frame_token += 1;
+            instance.surface.last_frame_label = format!("History: {}", instance.url);
+            self.push_event(
+                browser_id,
+                BrowserInstanceEventKind::HistoryChanged,
+                format!("Browser instance '{browser_id}' moved forward in history"),
+            );
+            self.push_event(
+                browser_id,
+                BrowserInstanceEventKind::SurfaceUpdated,
+                format!("Surface updated for '{browser_id}' after forward navigation"),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn resize_browser_surface(
+        &mut self,
+        browser_id: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<(), EngineError> {
+        let instance = self.browser_instance_mut(browser_id)?;
+        instance.surface.width = width;
+        instance.surface.height = height;
+        instance.surface.frame_token += 1;
+        instance.surface.last_frame_label = format!("{} ({}x{})", instance.title, width, height);
+        instance.status_text = format!("Resized surface to {width}x{height}");
+        self.push_event(
+            browser_id,
+            BrowserInstanceEventKind::SurfaceUpdated,
+            format!("Surface resized for '{browser_id}' to {width}x{height}"),
+        );
+        Ok(())
+    }
+
+    pub fn set_surface_focus(
+        &mut self,
+        browser_id: &str,
+        focused: bool,
+    ) -> Result<(), EngineError> {
+        let instance = self.browser_instance_mut(browser_id)?;
+        instance.surface.focused = focused;
+        instance.status_text = if focused {
+            "Surface focused".to_string()
+        } else {
+            "Surface blurred".to_string()
+        };
+        self.push_event(
+            browser_id,
+            BrowserInstanceEventKind::FocusChanged,
+            format!("Surface focus for '{browser_id}' changed to {focused}"),
+        );
         Ok(())
     }
 
@@ -368,6 +621,12 @@ impl WeboxEngine {
                 removed.backend, browser_id
             ),
         });
+        self.pending_events.push(BrowserInstanceEvent {
+            browser_id: browser_id.to_string(),
+            kind: BrowserInstanceEventKind::Closed,
+            summary: format!("Disposed browser instance '{browser_id}'"),
+            snapshot: None,
+        });
         Ok(())
     }
 
@@ -377,28 +636,36 @@ impl WeboxEngine {
         memory_usage_bytes: u64,
         memory_indicator: Option<String>,
         failure_state: Option<String>,
+        attribution: Option<String>,
     ) -> Result<(), EngineError> {
-        let instance = self
-            .browser_instances
-            .get_mut(browser_id)
-            .ok_or_else(|| EngineError {
-                message: format!("Browser instance '{}' was not found", browser_id),
-            })?;
-        instance.memory_usage_bytes = memory_usage_bytes;
-        instance.memory_indicator = memory_indicator;
-        instance.failure_state = failure_state;
+        let indicator_label = {
+            let instance = self.browser_instance_mut(browser_id)?;
+            instance.memory_usage_bytes = memory_usage_bytes;
+            instance.memory_indicator = memory_indicator;
+            instance.failure_state = failure_state;
+            instance.memory_attribution = attribution;
+            let indicator_label = instance
+                .memory_indicator
+                .clone()
+                .unwrap_or_else(|| "normal".to_string());
+            instance.status_text = format!(
+                "Observed memory state: {} bytes ({})",
+                memory_usage_bytes, indicator_label
+            );
+            indicator_label
+        };
         self.diagnostics.push(StartupDiagnostics {
             component: "engine.memory",
             detail: format!(
                 "Updated memory state for '{}' to {} bytes ({})",
-                browser_id,
-                memory_usage_bytes,
-                instance
-                    .memory_indicator
-                    .clone()
-                    .unwrap_or_else(|| "normal".to_string())
+                browser_id, memory_usage_bytes, indicator_label
             ),
         });
+        self.push_event(
+            browser_id,
+            BrowserInstanceEventKind::MemoryUpdated,
+            format!("Memory updated for '{browser_id}'"),
+        );
         Ok(())
     }
 
@@ -433,11 +700,38 @@ impl WeboxEngine {
     pub fn runtime_backend(&self) -> RuntimeBackend {
         self.runtime_backend
     }
+
+    pub fn drain_events(&mut self) -> Vec<BrowserInstanceEvent> {
+        self.pending_events.drain(..).collect()
+    }
+
+    fn browser_instance_mut(
+        &mut self,
+        browser_id: &str,
+    ) -> Result<&mut BrowserInstanceState, EngineError> {
+        self.browser_instances
+            .get_mut(browser_id)
+            .ok_or_else(|| EngineError {
+                message: format!("Browser instance '{}' was not found", browser_id),
+            })
+    }
+
+    fn push_event(&mut self, browser_id: &str, kind: BrowserInstanceEventKind, summary: String) {
+        self.pending_events.push(BrowserInstanceEvent {
+            browser_id: browser_id.to_string(),
+            kind,
+            summary,
+            snapshot: self.browser_instances.get(browser_id).cloned(),
+        });
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{EngineState, RuntimeBackend, WeboxEngine};
+    use super::{
+        BrowserInstanceEventKind, BrowserSurfaceRenderMode, EngineState, RuntimeBackend,
+        WeboxEngine,
+    };
     use webox_config::AppConfig;
 
     #[test]
@@ -451,6 +745,10 @@ mod tests {
         assert_eq!(instance.id, "browser-instance-1");
         assert_eq!(instance.title, "Loading...");
         assert_eq!(engine.runtime_backend(), RuntimeBackend::Simulated);
+        assert_eq!(
+            instance.surface.render_mode,
+            BrowserSurfaceRenderMode::Placeholder
+        );
     }
 
     #[test]
@@ -468,16 +766,66 @@ mod tests {
             .finish_navigation(&instance.id, "Example Dashboard")
             .unwrap();
         engine
-            .update_browser_memory(&instance.id, 123, Some("memory warning".to_string()), None)
+            .update_browser_memory(
+                &instance.id,
+                123,
+                Some("memory warning".to_string()),
+                None,
+                Some("precise: renderer metrics".to_string()),
+            )
             .unwrap();
+        engine
+            .resize_browser_surface(&instance.id, 1440, 900)
+            .unwrap();
+        engine.set_surface_focus(&instance.id, true).unwrap();
 
         let state = engine.browser_instance(&instance.id).unwrap();
         assert_eq!(state.url, "https://example.com/dashboard");
         assert_eq!(state.title, "Example Dashboard");
         assert_eq!(state.memory_indicator.as_deref(), Some("memory warning"));
+        assert_eq!(state.surface.width, 1440);
+        assert!(state.surface.focused);
+
+        let events = engine.drain_events();
+        assert!(events
+            .iter()
+            .any(|event| event.kind == BrowserInstanceEventKind::Created));
+        assert!(events
+            .iter()
+            .any(|event| event.kind == BrowserInstanceEventKind::LoadFinished));
+        assert!(events
+            .iter()
+            .any(|event| event.kind == BrowserInstanceEventKind::SurfaceUpdated));
 
         engine.close_browser_instance(&instance.id).unwrap();
         assert!(engine.browser_instance(&instance.id).is_none());
+    }
+
+    #[test]
+    fn engine_history_navigation_uses_live_state() {
+        let mut engine = WeboxEngine::new(&AppConfig::simulated());
+        let _ = engine.start();
+        let instance = engine
+            .create_browser_instance("https://example.com")
+            .unwrap();
+        engine
+            .navigate_browser_instance(&instance.id, "https://example.com/one")
+            .unwrap();
+        engine
+            .navigate_browser_instance(&instance.id, "https://example.com/two")
+            .unwrap();
+
+        engine.go_back_browser_instance(&instance.id).unwrap();
+        assert_eq!(
+            engine.browser_instance(&instance.id).unwrap().url,
+            "https://example.com/one"
+        );
+
+        engine.go_forward_browser_instance(&instance.id).unwrap();
+        assert_eq!(
+            engine.browser_instance(&instance.id).unwrap().url,
+            "https://example.com/two"
+        );
     }
 
     #[test]

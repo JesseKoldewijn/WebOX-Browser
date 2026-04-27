@@ -1,7 +1,4 @@
-## Purpose
-Define the standalone browser UI behaviors for visible chrome, tab presentation, and critical state surfacing.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Browser provides full MVP chrome
 The system SHALL provide a standalone browser interface with address bar, tab strip, navigation controls, window controls, settings access, and a live embedded page surface suitable for a full browser MVP.

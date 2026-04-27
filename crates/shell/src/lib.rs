@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 
 use webox_config::AppConfig;
-use webox_engine::{StartupDiagnostics, WeboxEngine};
+use webox_engine::{
+    BrowserInstanceEvent, BrowserInstanceEventKind, BrowserInstanceState, StartupDiagnostics,
+    WeboxEngine,
+};
 use webox_memory::{
     MemoryController, MemoryPressureLevel, PolicyDecision, RecoveryReport, SupportedSystemReport,
     TabTelemetry,
 };
-use webox_ui::{BrowserCommand, BrowserWindowModel, WindowId};
+use webox_ui::{BrowserCommand, BrowserWindowModel, SurfaceViewState, TabViewState, WindowId};
 
 pub struct HostShell {
     config: AppConfig,
@@ -35,10 +38,12 @@ impl HostShell {
 
     pub fn start(&mut self) {
         self.startup_diagnostics.push(self.engine.start());
+        self.sync_engine_events();
     }
 
     pub fn shutdown(&mut self) {
         self.startup_diagnostics.push(self.engine.shutdown());
+        self.sync_engine_events();
     }
 
     pub fn create_window(&mut self, id: impl Into<String>) -> WindowId {
@@ -53,64 +58,92 @@ impl HostShell {
             .engine
             .create_browser_instance(initial_url)
             .map_err(|error| error.message)?;
+        let tab_id = {
+            let window = self
+                .windows
+                .get_mut(window_id)
+                .ok_or_else(|| format!("Window '{}' was not found", window_id))?;
+            window.add_tab(descriptor.id.clone(), descriptor.initial_url.clone())
+        };
+        self.tab_runtime_modes
+            .insert(tab_id.clone(), format!("{:?}", descriptor.backend));
+        self.sync_engine_events();
         let window = self
             .windows
             .get_mut(window_id)
             .ok_or_else(|| format!("Window '{}' was not found", window_id))?;
-        let tab_id = window.add_tab(descriptor.id.clone(), descriptor.initial_url.clone());
-        if let Some(tab) = window.tabs.iter_mut().find(|tab| tab.id == tab_id) {
-            tab.title = descriptor.title;
-            tab.is_loading = descriptor.is_loading;
-        }
-        self.tab_runtime_modes
-            .insert(tab_id.clone(), format!("{:?}", descriptor.backend));
+        window.set_active_tab(&tab_id);
         Ok(tab_id)
     }
 
-    pub fn navigate_tab(&mut self, window_id: &str, tab_id: &str, url: &str) -> Result<(), String> {
+    pub fn navigate_tab(
+        &mut self,
+        _window_id: &str,
+        tab_id: &str,
+        url: &str,
+    ) -> Result<(), String> {
         self.engine
             .navigate_browser_instance(tab_id, url)
             .map_err(|error| error.message)?;
-        let window = self
-            .windows
-            .get_mut(window_id)
-            .ok_or_else(|| format!("Window '{}' was not found", window_id))?;
-        window.navigate_tab(tab_id, url);
+        self.sync_engine_events();
         Ok(())
     }
 
     pub fn finish_navigation(
         &mut self,
-        window_id: &str,
+        _window_id: &str,
         tab_id: &str,
         title: &str,
     ) -> Result<(), String> {
         self.engine
             .finish_navigation(tab_id, title)
             .map_err(|error| error.message)?;
-        let window = self
-            .windows
-            .get_mut(window_id)
-            .ok_or_else(|| format!("Window '{}' was not found", window_id))?;
-        window.finish_loading(tab_id, title);
+        self.sync_engine_events();
         Ok(())
     }
 
-    pub fn go_back(&mut self, window_id: &str, tab_id: &str) -> Result<(), String> {
-        let window = self
-            .windows
-            .get_mut(window_id)
-            .ok_or_else(|| format!("Window '{}' was not found", window_id))?;
-        window.go_back(tab_id);
+    pub fn fail_tab_navigation(&mut self, tab_id: &str, message: &str) -> Result<(), String> {
+        self.engine
+            .fail_navigation(tab_id, message)
+            .map_err(|error| error.message)?;
+        self.sync_engine_events();
         Ok(())
     }
 
-    pub fn go_forward(&mut self, window_id: &str, tab_id: &str) -> Result<(), String> {
-        let window = self
-            .windows
-            .get_mut(window_id)
-            .ok_or_else(|| format!("Window '{}' was not found", window_id))?;
-        window.go_forward(tab_id);
+    pub fn go_back(&mut self, _window_id: &str, tab_id: &str) -> Result<(), String> {
+        self.engine
+            .go_back_browser_instance(tab_id)
+            .map_err(|error| error.message)?;
+        self.sync_engine_events();
+        Ok(())
+    }
+
+    pub fn go_forward(&mut self, _window_id: &str, tab_id: &str) -> Result<(), String> {
+        self.engine
+            .go_forward_browser_instance(tab_id)
+            .map_err(|error| error.message)?;
+        self.sync_engine_events();
+        Ok(())
+    }
+
+    pub fn resize_tab_surface(
+        &mut self,
+        tab_id: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
+        self.engine
+            .resize_browser_surface(tab_id, width, height)
+            .map_err(|error| error.message)?;
+        self.sync_engine_events();
+        Ok(())
+    }
+
+    pub fn focus_tab_surface(&mut self, tab_id: &str, focused: bool) -> Result<(), String> {
+        self.engine
+            .set_surface_focus(tab_id, focused)
+            .map_err(|error| error.message)?;
+        self.sync_engine_events();
         Ok(())
     }
 
@@ -124,6 +157,7 @@ impl HostShell {
             .ok_or_else(|| format!("Window '{}' was not found", window_id))?;
         window.close_tab(tab_id);
         self.tab_runtime_modes.remove(tab_id);
+        self.sync_engine_events();
         Ok(())
     }
 
@@ -133,16 +167,19 @@ impl HostShell {
         telemetry: &TabTelemetry,
     ) -> Result<PolicyDecision, String> {
         let decision = self.memory_controller.evaluate(telemetry);
-        let window = self
-            .windows
-            .get_mut(window_id)
-            .ok_or_else(|| format!("Window '{}' was not found", window_id))?;
         let label = match decision.event.level {
             MemoryPressureLevel::Normal => None,
             MemoryPressureLevel::Warning => Some("memory warning".to_string()),
             MemoryPressureLevel::Critical => Some("critical memory pressure".to_string()),
             MemoryPressureLevel::Exhausted => Some("memory exhaustion risk".to_string()),
         };
+        let attribution = Some(
+            if matches!(decision.event.level, MemoryPressureLevel::Exhausted) {
+                "fallback: aggregated browser process metrics".to_string()
+            } else {
+                "observed: renderer/browser/gpu telemetry".to_string()
+            },
+        );
         self.engine
             .update_browser_memory(
                 &telemetry.tab_id,
@@ -153,9 +190,14 @@ impl HostShell {
                 } else {
                     None
                 },
+                attribution.clone(),
             )
             .map_err(|error| error.message)?;
-        window.set_memory_indicator(&telemetry.tab_id, label);
+        let window = self
+            .windows
+            .get_mut(window_id)
+            .ok_or_else(|| format!("Window '{}' was not found", window_id))?;
+        window.set_memory_indicator(&telemetry.tab_id, label, attribution);
         if matches!(decision.event.level, MemoryPressureLevel::Exhausted) {
             let report = self.memory_controller.capture_recovery_report(telemetry);
             window.set_failure_state(
@@ -164,6 +206,7 @@ impl HostShell {
             );
             self.recovery_reports.push(report);
         }
+        self.sync_engine_events();
         Ok(decision)
     }
 
@@ -176,9 +219,8 @@ impl HostShell {
             BrowserCommand::Navigate { tab_id, url } => self.navigate_tab(window_id, &tab_id, &url),
             BrowserCommand::Reload { tab_id } => {
                 let current_url = self
-                    .windows
-                    .get(window_id)
-                    .and_then(|window| window.tabs.iter().find(|tab| tab.id == tab_id))
+                    .engine
+                    .browser_instance(&tab_id)
                     .map(|tab| tab.url.clone())
                     .ok_or_else(|| format!("Tab '{}' was not found", tab_id))?;
                 self.navigate_tab(window_id, &tab_id, &current_url)
@@ -191,9 +233,16 @@ impl HostShell {
                     .get_mut(window_id)
                     .ok_or_else(|| format!("Window '{}' was not found", window_id))?;
                 window.set_active_tab(&tab_id);
-                Ok(())
+                self.focus_tab_surface(&tab_id, true)
             }
             BrowserCommand::CloseTab { tab_id } => self.close_tab(window_id, &tab_id),
+        }
+    }
+
+    pub fn sync_engine_events(&mut self) {
+        let events = self.engine.drain_events();
+        for event in events {
+            self.apply_engine_event(event);
         }
     }
 
@@ -230,6 +279,52 @@ impl HostShell {
     #[must_use]
     pub fn engine(&self) -> &WeboxEngine {
         &self.engine
+    }
+
+    fn apply_engine_event(&mut self, event: BrowserInstanceEvent) {
+        if let Some(snapshot) = event.snapshot {
+            self.update_windows_from_snapshot(&snapshot);
+        } else if matches!(event.kind, BrowserInstanceEventKind::Closed) {
+            self.remove_closed_tab(&event.browser_id);
+        }
+    }
+
+    fn update_windows_from_snapshot(&mut self, snapshot: &BrowserInstanceState) {
+        let next = TabViewState {
+            id: snapshot.id.clone(),
+            title: snapshot.title.clone(),
+            url: snapshot.url.clone(),
+            is_loading: snapshot.is_loading,
+            memory_indicator: snapshot.memory_indicator.clone(),
+            failure_state: snapshot.failure_state.clone(),
+            memory_attribution: snapshot.memory_attribution.clone(),
+            status_text: snapshot.status_text.clone(),
+            surface: SurfaceViewState {
+                surface_id: snapshot.surface.surface_id.clone(),
+                width: snapshot.surface.width,
+                height: snapshot.surface.height,
+                focused: snapshot.surface.focused,
+                frame_token: snapshot.surface.frame_token,
+                frame_label: snapshot.surface.last_frame_label.clone(),
+            },
+        };
+
+        for window in self.windows.values_mut() {
+            if window.tabs.iter().any(|tab| tab.id == snapshot.id) {
+                window.update_from_engine(next.clone());
+                if window.active_tab_id.as_deref() == Some(snapshot.id.as_str()) {
+                    window.set_active_tab(&snapshot.id);
+                }
+            }
+        }
+    }
+
+    fn remove_closed_tab(&mut self, tab_id: &str) {
+        for window in self.windows.values_mut() {
+            if window.tabs.iter().any(|tab| tab.id == tab_id) {
+                window.close_tab(tab_id);
+            }
+        }
     }
 }
 
@@ -279,6 +374,7 @@ mod tests {
             .unwrap();
         let current_url = &shell.windows()[&window].tabs[0].url;
         assert_eq!(current_url, "https://example.com");
+        assert!(shell.windows()[&window].tabs[0].is_loading);
     }
 
     #[test]
@@ -297,5 +393,32 @@ mod tests {
 
         shell.close_tab(&window, &tab).unwrap();
         assert!(shell.engine().browser_instance(&tab).is_none());
+    }
+
+    #[test]
+    fn host_shell_history_commands_use_engine_navigation() {
+        let mut shell = HostShell::new(AppConfig::simulated());
+        shell.start();
+        let window = shell.create_window("window-1");
+        let tab = shell.open_tab(&window, "https://webox.dev").unwrap();
+
+        shell
+            .navigate_tab(&window, &tab, "https://example.com/one")
+            .unwrap();
+        shell
+            .navigate_tab(&window, &tab, "https://example.com/two")
+            .unwrap();
+
+        shell.go_back(&window, &tab).unwrap();
+        assert_eq!(
+            shell.windows()[&window].tabs[0].url,
+            "https://example.com/one"
+        );
+
+        shell.go_forward(&window, &tab).unwrap();
+        assert_eq!(
+            shell.windows()[&window].tabs[0].url,
+            "https://example.com/two"
+        );
     }
 }
