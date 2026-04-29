@@ -1,0 +1,80 @@
+# git-cliff configuration for webox-browser
+# Generates CHANGELOG.md from conventional commits.
+# Docs: https://git-cliff.org/docs/configuration
+
+[changelog]
+# Header shown at the top of the generated changelog file.
+header = """
+# Changelog
+
+All notable changes to webox-browser are documented here.
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+"""
+
+# Template for each release section (Tera syntax).
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [Unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.breaking %}**BREAKING** {% endif %}\
+  {{ commit.message | upper_first }} \
+  ([`{{ commit.id | truncate(length=7, end="") }}`]({{ commit.remote.link }}))\
+  {% if commit.body %}\n\n  {{ commit.body | indent(width=2, first=false) }}{% endif %}
+{% endfor %}
+{% endfor %}\n
+"""
+
+# Remove trailing whitespace from the generated body.
+trim = true
+
+# Footer appended after all release sections.
+footer = ""
+
+[git]
+# Parse commits according to the Conventional Commits specification.
+conventional_commits = true
+
+# Filter out commits that don't match conventional commit format.
+filter_unconventional = true
+
+# Regex patterns for splitting commit message subject into components.
+split_commits = false
+
+# Regex to filter out commits by their message.
+commit_preprocessors = [
+  # Strip issue references like (#123) from the end of messages.
+  { pattern = '\((\w+\s)?#([0-9]+)\)', replace = "([#${2}]({{ remote.link }}/issues/${2}))"},
+]
+
+# Map conventional commit types to changelog section headings.
+commit_parsers = [
+  { message = "^feat",     group = "Features" },
+  { message = "^fix",      group = "Bug Fixes" },
+  { message = "^perf",     group = "Performance" },
+  { message = "^refactor", group = "Refactoring" },
+  { message = "^docs",     group = "Documentation" },
+  { message = "^test",     group = "Testing" },
+  { message = "^build",    group = "Build" },
+  { message = "^ci",       group = "CI/CD" },
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^chore",    group = "Miscellaneous" },
+  { message = "^revert",   group = "Reverted Changes" },
+]
+
+# Do not include commits with [skip changelog] in the message.
+filter_commits = true
+
+# Sort commits within each group by date (newest first).
+sort_commits = "newest"
+
+# GitHub remote config — used to generate commit/PR links in the changelog.
+[remote.github]
+owner = "JesseKoldewijn"
+repo = "webox-browser"

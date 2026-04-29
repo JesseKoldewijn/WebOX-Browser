@@ -3,3 +3,13 @@
 /dist/
 /.DS_Store
 /.webox/
+
+# CEF binary distributions — downloaded by build.rs on demand.
+# Only the .gitkeep and per-platform README are committed.
+/third_party/cef/downloads/
+/third_party/cef/*/cef_linux_*/
+/third_party/cef/*/cef_macos_*/
+/third_party/cef/*/cef_windows_*/
+/third_party/cef/linux-x64/
+/third_party/cef/macos-arm64/
+/third_party/cef/windows-x64/
