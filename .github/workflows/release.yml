@@ -63,6 +63,8 @@ jobs:
     outputs:
       releases_created: ${{ steps.release-plz.outputs.releases_created }}
       tag: ${{ steps.release-plz.outputs.tag }}
+      # Strip leading 'v' for use in archive filenames
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -98,147 +100,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
-  # ── Build release artifacts when a new version was just published ─────────────
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${{ steps.release-plz.outputs.tag }}"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  # ── Build release artifacts (reuses build.yml matrix, no duplication) ─────────
   build-release-artifacts:
     name: Build Release Artifacts
     needs: release-plz
     if: needs.release-plz.outputs.releases_created == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: linux-x64
-            runner: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            use_cross: false
-            cef_cache_key: cef-linux-x64-147.0.10
-            sys_deps: >-
-              libgtk-3-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
-              libxkbcommon-dev libssl-dev pkg-config
-            archive_ext: tar.gz
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.release-plz.outputs.version }}
 
-          - name: linux-arm64
-            runner: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            use_cross: true
-            cef_cache_key: cef-linux-arm64-147.0.10
-            sys_deps: ""
-            archive_ext: tar.gz
-
-          - name: macos-arm64
-            runner: macos-latest
-            target: aarch64-apple-darwin
-            use_cross: false
-            cef_cache_key: cef-macos-arm64-147.0.10
-            sys_deps: ""
-            archive_ext: tar.gz
-
-          - name: windows-x64
-            runner: windows-latest
-            target: x86_64-pc-windows-msvc
-            use_cross: false
-            cef_cache_key: cef-windows-x64-147.0.10
-            sys_deps: ""
-            archive_ext: zip
-
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # Checkout the tagged commit that release-plz just created
-          ref: ${{ needs.release-plz.outputs.tag }}
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Install cross
-        if: matrix.use_cross
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cross
-
-      - name: Install system dependencies
-        if: matrix.sys_deps != ''
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ${{ matrix.sys_deps }}
-
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-cargo-registry-
-
-      - name: Cache CEF distribution
-        uses: actions/cache@v4
-        with:
-          path: third_party/cef/
-          key: ${{ matrix.cef_cache_key }}
-
-      - name: Build (native)
-        if: "!matrix.use_cross"
-        run: cargo build --release --target ${{ matrix.target }} -p webox-browser-app
-
-      - name: Build (cross)
-        if: matrix.use_cross
-        run: cross build --release --target ${{ matrix.target }} -p webox-browser-app
-
-      - name: Stage artifacts (Linux/macOS)
-        if: matrix.archive_ext == 'tar.gz'
-        shell: bash
-        run: |
-          mkdir -p staging
-          cp target/${{ matrix.target }}/release/webox-browser-app staging/
-
-          case "${{ matrix.target }}" in
-            x86_64-unknown-linux-gnu)  slug="linux-x64" ;;
-            aarch64-unknown-linux-gnu) slug="linux-arm64" ;;
-            aarch64-apple-darwin)      slug="macos-arm64" ;;
-            x86_64-apple-darwin)       slug="macos-x64" ;;
-          esac
-          [ -d "third_party/cef/$slug" ] && cp -r "third_party/cef/$slug/." staging/
-
-          VERSION="${{ needs.release-plz.outputs.tag }}"
-          VERSION="${VERSION#v}"
-          tar -czf "webox-browser-${VERSION}-${{ matrix.name }}.tar.gz" -C staging .
-
-      - name: Stage artifacts (Windows)
-        if: matrix.archive_ext == 'zip'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Path staging -Force
-          Copy-Item "target/${{ matrix.target }}/release/webox-browser-app.exe" staging/
-          $slug = "windows-x64"
-          if (Test-Path "third_party/cef/$slug") {
-            Copy-Item "third_party/cef/$slug/*" -Destination staging/ -Recurse -Force
-          }
-          $ver = "${{ needs.release-plz.outputs.tag }}" -replace '^v', ''
-          Compress-Archive -Path staging/* -DestinationPath "webox-browser-${ver}-${{ matrix.name }}.zip"
-
-      - name: Upload release artifact (tar)
-        if: matrix.archive_ext == 'tar.gz'
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ matrix.name }}
-          path: "webox-browser-*-${{ matrix.name }}.tar.gz"
-          retention-days: 1
-
-      - name: Upload release artifact (zip)
-        if: matrix.archive_ext == 'zip'
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ matrix.name }}
-          path: "webox-browser-*-${{ matrix.name }}.zip"
-          retention-days: 1
-
-  # ── Attach binaries to the GitHub Release created by release-plz ─────────────
+  # ── Attach versioned binaries to the GitHub Release ───────────────────────────
   attach-to-release:
     name: Attach artifacts to GitHub Release
     runs-on: ubuntu-latest
@@ -249,7 +126,7 @@ jobs:
       - name: Download all release artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: release-*
+          pattern: webox-browser-*
           merge-multiple: true
           path: dist/
 

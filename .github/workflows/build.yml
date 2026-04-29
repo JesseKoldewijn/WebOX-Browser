@@ -13,6 +13,10 @@ on:
         description: "Upload build artifacts for release"
         type: boolean
         default: false
+      version:
+        description: "Version string to embed in archive filenames (e.g. '1.2.3'). Omit for unversioned snapshot builds."
+        type: string
+        default: ""
     outputs:
       artifact_names:
         description: "Comma-separated list of artifact names"
@@ -175,14 +179,29 @@ jobs:
       # ── Archive ─────────────────────────────────────────────────────────────
       - name: Create tar.gz archive (Linux/macOS)
         if: matrix.archive_cmd == 'tar'
+        shell: bash
         run: |
-          tar -czf webox-browser-${{ matrix.name }}.tar.gz -C staging .
+          VERSION="${{ inputs.version }}"
+          if [ -n "$VERSION" ]; then
+            ARCHIVE="webox-browser-${VERSION}-${{ matrix.name }}.tar.gz"
+          else
+            ARCHIVE="webox-browser-${{ matrix.name }}.tar.gz"
+          fi
+          tar -czf "$ARCHIVE" -C staging .
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Create zip archive (Windows)
         if: matrix.archive_cmd == 'zip'
         shell: pwsh
         run: |
-          Compress-Archive -Path staging/* -DestinationPath webox-browser-${{ matrix.name }}.zip
+          $version = "${{ inputs.version }}"
+          if ($version) {
+            $archive = "webox-browser-${version}-${{ matrix.name }}.zip"
+          } else {
+            $archive = "webox-browser-${{ matrix.name }}.zip"
+          }
+          Compress-Archive -Path staging/* -DestinationPath $archive
+          "ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       # ── Upload ───────────────────────────────────────────────────────────────
       - name: Upload build artifact (tar)
@@ -190,7 +209,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: webox-browser-${{ matrix.name }}
-          path: webox-browser-${{ matrix.name }}.tar.gz
+          path: ${{ env.ARCHIVE }}
           retention-days: 7
 
       - name: Upload build artifact (zip)
@@ -198,7 +217,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: webox-browser-${{ matrix.name }}
-          path: webox-browser-${{ matrix.name }}.zip
+          path: ${{ env.ARCHIVE }}
           retention-days: 7
 
   # ── Collect outputs for callers ──────────────────────────────────────────────
