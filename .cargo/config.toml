@@ -17,9 +17,7 @@ rustflags = [
 
 [env]
 # Point cef-dll-sys at a stable workspace-local directory for CEF downloads.
-# With this set, cef-dll-sys downloads to third_party/cef/<version>/cef_linux_x86_64/
-# instead of the ephemeral cargo OUT_DIR, so we can reuse the same assets at
-# runtime without a second download.
-# relative = true resolves from the .cargo/ directory, so "../third_party/cef"
-# points to <workspace>/third_party/cef.
-CEF_PATH = { value = "../third_party/cef", relative = true }
+# relative = true resolves from the workspace root, so "third_party/cef"
+# resolves to <workspace>/third_party/cef on all platforms including inside
+# the cross Docker container (where the workspace is mounted at /project/).
+CEF_PATH = { value = "third_party/cef", relative = true }
