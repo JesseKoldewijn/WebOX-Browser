@@ -1,6 +1,12 @@
 # Cross.toml — configuration for `cross` (cross-compilation via Docker)
 # https://github.com/cross-rs/cross/wiki/Configuration
 
+[target.aarch64-unknown-linux-gnu.env]
+# CEF_PATH is set in build.yml to $GITHUB_WORKSPACE/third_party/cef.
+# cross remaps workspace paths to /project/ inside the Docker container,
+# so inside Docker CEF_PATH becomes /project/third_party/cef.
+passthrough = ["CEF_PATH"]
+
 [target.aarch64-unknown-linux-gnu]
 # Install ARM64 system libraries that libcef.so links against.
 # These mirror the sys_deps used for the native linux-x64 build plus
