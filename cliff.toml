@@ -77,4 +77,4 @@ sort_commits = "newest"
 # GitHub remote config — used to generate commit/PR links in the changelog.
 [remote.github]
 owner = "JesseKoldewijn"
-repo = "webox-browser"
+repo = "WebOX-Browser"

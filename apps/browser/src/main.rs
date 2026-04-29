@@ -579,27 +579,28 @@ impl BrowserApp {
                 }
                 egui::Event::MouseWheel { delta, .. } => {
                     if let Some(pos) = ui.ctx().pointer_hover_pos()
-                        && rect.contains(pos) {
-                            let local = pos - rect.min;
-                            let _ = self.shell.dispatch_surface_input(
-                                tab_id,
-                                SurfaceInputEvent::Wheel {
-                                    x: local.x as i32,
-                                    y: local.y as i32,
-                                    delta_x: delta.x as i32,
-                                    delta_y: delta.y as i32,
-                                },
-                            );
-                        }
+                        && rect.contains(pos)
+                    {
+                        let local = pos - rect.min;
+                        let _ = self.shell.dispatch_surface_input(
+                            tab_id,
+                            SurfaceInputEvent::Wheel {
+                                x: local.x as i32,
+                                y: local.y as i32,
+                                delta_x: delta.x as i32,
+                                delta_y: delta.y as i32,
+                            },
+                        );
+                    }
                 }
-                egui::Event::Key { key, pressed, .. } => {
+                egui::Event::Key { key, pressed, .. }
                     // Only forward to CEF when no egui widget (e.g. address bar)
                     // currently holds keyboard focus. Without this guard, typing
                     // in the address bar floods CEF with spurious key events and
                     // crashes the X connection.
                     if ui.ctx().memory(|m| m.focused().is_none())
                         && rect.contains(ui.ctx().pointer_hover_pos().unwrap_or(rect.center()))
-                    {
+                    => {
                         let _ = self.shell.dispatch_surface_input(
                             tab_id,
                             SurfaceInputEvent::Key {
@@ -608,16 +609,14 @@ impl BrowserApp {
                             },
                         );
                     }
-                }
-                egui::Event::Text(text) => {
+                egui::Event::Text(text)
                     if ui.ctx().memory(|m| m.focused().is_none())
                         && rect.contains(ui.ctx().pointer_hover_pos().unwrap_or(rect.center()))
-                    {
+                    => {
                         let _ = self
                             .shell
                             .dispatch_surface_input(tab_id, SurfaceInputEvent::Text { text });
                     }
-                }
                 egui::Event::WindowFocused(focused) => {
                     let _ = self
                         .shell

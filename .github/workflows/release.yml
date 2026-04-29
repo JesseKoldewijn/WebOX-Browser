@@ -76,8 +76,8 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
 
       - name: Run release-plz
         id: release-plz
@@ -148,8 +148,8 @@ jobs:
           # Checkout the tagged commit that release-plz just created
           ref: ${{ needs.release-plz.outputs.tag }}
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
         with:
           targets: ${{ matrix.target }}
 
