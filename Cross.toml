@@ -5,10 +5,12 @@
 # Install ARM64 system libraries that libcef.so links against.
 # These mirror the sys_deps used for the native linux-x64 build plus
 # the additional libraries CEF requires (NSS, ALSA, dbus, ATK, GBM, xkbcommon).
+# Note: shell line-continuation (\) is only valid inside TOML multi-line
+# basic strings ("""); single-quoted strings reject embedded newlines.
 pre-build = [
     "dpkg --add-architecture arm64",
     "apt-get update -qq",
-    "apt-get install -y --no-install-recommends \
+    """apt-get install -y --no-install-recommends \
         libgtk-3-dev:arm64 \
         libxcb-render0-dev:arm64 \
         libxcb-shape0-dev:arm64 \
@@ -28,5 +30,5 @@ pre-build = [
         libxfixes-dev:arm64 \
         libxrandr-dev:arm64 \
         libpango1.0-dev:arm64 \
-        libcups2-dev:arm64",
+        libcups2-dev:arm64""",
 ]
