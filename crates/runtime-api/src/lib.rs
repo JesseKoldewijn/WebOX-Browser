@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use webox_config::AppConfig;
 use webox_engine::{
-    BrowserInstanceDescriptor, BrowserInstanceEvent, BrowserInstanceState, StartupDiagnostics,
-    WeboxEngine,
+    BrowserInstanceDescriptor, BrowserInstanceEvent, BrowserInstanceState, HostSurfaceInputEvent,
+    RuntimeReadiness, StartupDiagnostics, WeboxEngine,
 };
 use webox_memory::{
-    MemoryController, MemoryEvent, PolicyDecision, SupportedSystemReport, TabTelemetry,
+    LinuxProcessMemoryCollector, MemoryAttribution, MemoryController, MemoryEvent, PolicyDecision,
+    SupportedSystemReport, TabTelemetry,
 };
 
 pub trait MemoryEventObserver: Send + Sync {
@@ -22,6 +23,7 @@ pub struct EmbeddedRuntimeConfig {
 pub struct EmbeddedRuntime {
     engine: WeboxEngine,
     memory_controller: MemoryController,
+    memory_collector: LinuxProcessMemoryCollector,
     initialized: bool,
     observer: Option<Arc<dyn MemoryEventObserver>>,
     startup_diagnostics: Vec<StartupDiagnostics>,
@@ -44,6 +46,7 @@ impl EmbeddedRuntime {
             memory_controller: MemoryController::new(
                 config.app_config.startup.max_memory_per_tab_bytes,
             ),
+            memory_collector: LinuxProcessMemoryCollector::new(),
             initialized: true,
             observer: None,
             startup_diagnostics: vec![startup],
@@ -70,6 +73,14 @@ impl EmbeddedRuntime {
     pub fn navigate_browser_instance(&mut self, browser_id: &str, url: &str) -> Result<(), String> {
         self.engine
             .navigate_browser_instance(browser_id, url)
+            .map_err(|error| error.message)?;
+        self.capture_engine_events();
+        Ok(())
+    }
+
+    pub fn reload_browser_instance(&mut self, browser_id: &str) -> Result<(), String> {
+        self.engine
+            .reload_browser_instance(browser_id)
             .map_err(|error| error.message)?;
         self.capture_engine_events();
         Ok(())
@@ -112,9 +123,46 @@ impl EmbeddedRuntime {
         Ok(())
     }
 
+    pub fn dispatch_text_input(&mut self, browser_id: &str, text: &str) -> Result<(), String> {
+        self.dispatch_surface_input(
+            browser_id,
+            HostSurfaceInputEvent::Text {
+                text: text.to_string(),
+            },
+        )
+    }
+
+    pub fn dispatch_surface_input(
+        &mut self,
+        browser_id: &str,
+        event: HostSurfaceInputEvent,
+    ) -> Result<(), String> {
+        self.engine
+            .dispatch_surface_input(browser_id, event)
+            .map_err(|error| error.message)?;
+        self.capture_engine_events();
+        Ok(())
+    }
+
     pub fn apply_memory_sample(
         &mut self,
         telemetry: &TabTelemetry,
+    ) -> Result<RuntimeBrowserSnapshot, String> {
+        self.apply_memory_sample_with_attribution(telemetry, MemoryAttribution::synthetic())
+    }
+
+    pub fn apply_observed_memory_sample(
+        &mut self,
+        browser_id: &str,
+    ) -> Result<RuntimeBrowserSnapshot, String> {
+        let observed = self.memory_collector.collect_for_tab(browser_id);
+        self.apply_memory_sample_with_attribution(&observed.telemetry, observed.attribution)
+    }
+
+    pub fn apply_memory_sample_with_attribution(
+        &mut self,
+        telemetry: &TabTelemetry,
+        attribution: MemoryAttribution,
     ) -> Result<RuntimeBrowserSnapshot, String> {
         let decision = self.memory_controller.evaluate(telemetry);
         if let Some(observer) = &self.observer {
@@ -144,16 +192,7 @@ impl EmbeddedRuntime {
                 } else {
                     None
                 },
-                Some(
-                    if matches!(
-                        decision.event.level,
-                        webox_memory::MemoryPressureLevel::Exhausted
-                    ) {
-                        "fallback: aggregated browser process metrics".to_string()
-                    } else {
-                        "observed: renderer/browser/gpu telemetry".to_string()
-                    },
-                ),
+                Some(attribution.label()),
             )
             .map_err(|error| error.message)?;
         self.capture_engine_events();
@@ -192,6 +231,16 @@ impl EmbeddedRuntime {
     #[must_use]
     pub fn diagnostics(&self) -> &[StartupDiagnostics] {
         &self.startup_diagnostics
+    }
+
+    #[must_use]
+    pub fn runtime_readiness(&self) -> &RuntimeReadiness {
+        self.engine.runtime_readiness()
+    }
+
+    #[must_use]
+    pub fn live_mvp_ready(&self) -> bool {
+        self.engine.live_mvp_ready()
     }
 
     #[must_use]
@@ -253,5 +302,26 @@ mod tests {
         assert_eq!(snapshot.policy_decision.event.tab_id, instance.id);
         assert_eq!(snapshot.browser.surface.width, 1600);
         assert!(!runtime.drain_events().is_empty());
+    }
+
+    #[test]
+    fn embedded_runtime_exposes_observed_memory_attribution() {
+        let mut runtime = EmbeddedRuntime::new(EmbeddedRuntimeConfig {
+            app_config: AppConfig::simulated(),
+            available_memory_bytes: 16 * 1024 * 1024 * 1024,
+        });
+        let instance = runtime
+            .create_browser_instance("https://example.com")
+            .unwrap();
+
+        let snapshot = runtime.apply_observed_memory_sample(&instance.id).unwrap();
+
+        assert!(
+            snapshot
+                .browser
+                .memory_attribution
+                .as_deref()
+                .is_some_and(|attribution| attribution.contains("live_mvp_evidence=true"))
+        );
     }
 }

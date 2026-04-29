@@ -4133,6 +4133,8 @@ dependencies = [
 name = "webox-browser-app"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "download-cef",
  "eframe",
  "egui_extras",
  "webox-config",

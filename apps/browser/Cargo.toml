@@ -11,3 +11,9 @@ webox-config = { path = "../../crates/config" }
 webox-memory = { path = "../../crates/memory" }
 webox-shell = { path = "../../crates/shell" }
 webox-ui = { path = "../../crates/ui" }
+
+[build-dependencies]
+# Used in build.rs to download and stage CEF runtime assets into third_party/cef/
+# and to copy them next to the binary for portable $ORIGIN-relative loading.
+download-cef = "2.3.1"
+anyhow = "1"

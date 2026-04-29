@@ -9,6 +9,17 @@ pub struct SurfaceViewState {
     pub focused: bool,
     pub frame_token: u64,
     pub frame_label: String,
+    pub render_evidence: Option<String>,
+    pub frame_buffer: Option<SurfaceFrameBuffer>,
+    pub damage_events: u64,
+    pub host_surface_failure: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SurfaceFrameBuffer {
+    pub width: u32,
+    pub height: u32,
+    pub bgra: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,6 +32,8 @@ pub struct TabViewState {
     pub failure_state: Option<String>,
     pub memory_attribution: Option<String>,
     pub status_text: String,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
     pub surface: SurfaceViewState,
 }
 
@@ -39,6 +52,48 @@ pub enum BrowserCommand {
     Forward { tab_id: TabId },
     ActivateTab { tab_id: TabId },
     CloseTab { tab_id: TabId },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurfaceMouseButton {
+    Left,
+    Middle,
+    Right,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SurfaceInputEvent {
+    PointerMove {
+        x: i32,
+        y: i32,
+    },
+    PointerButton {
+        x: i32,
+        y: i32,
+        button: SurfaceMouseButton,
+        pressed: bool,
+        click_count: i32,
+    },
+    Wheel {
+        x: i32,
+        y: i32,
+        delta_x: i32,
+        delta_y: i32,
+    },
+    Key {
+        key_code: i32,
+        pressed: bool,
+    },
+    Text {
+        text: String,
+    },
+    Focus {
+        focused: bool,
+    },
+    Resize {
+        width: u32,
+        height: u32,
+    },
 }
 
 impl BrowserWindowModel {
@@ -63,6 +118,8 @@ impl BrowserWindowModel {
             failure_state: None,
             memory_attribution: None,
             status_text: format!("Preparing {url}"),
+            can_go_back: false,
+            can_go_forward: false,
             surface: SurfaceViewState {
                 surface_id: format!("surface-{tab_id}"),
                 width: 1280,
@@ -70,6 +127,10 @@ impl BrowserWindowModel {
                 focused: false,
                 frame_token: 0,
                 frame_label: format!("Preparing {url}"),
+                render_evidence: None,
+                frame_buffer: None,
+                damage_events: 0,
+                host_surface_failure: None,
             },
         });
         self.active_tab_id = Some(tab_id.clone());
@@ -158,6 +219,8 @@ mod tests {
             failure_state: None,
             memory_attribution: Some("observed renderer metrics".to_string()),
             status_text: "Loaded updated page".to_string(),
+            can_go_back: true,
+            can_go_forward: false,
             surface: SurfaceViewState {
                 surface_id: format!("surface-{id}"),
                 width: 1440,
@@ -165,6 +228,10 @@ mod tests {
                 focused: true,
                 frame_token: 3,
                 frame_label: "Updated frame".to_string(),
+                render_evidence: Some("test render evidence".to_string()),
+                frame_buffer: None,
+                damage_events: 1,
+                host_surface_failure: None,
             },
         }
     }

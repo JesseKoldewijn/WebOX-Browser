@@ -1,3 +1,5 @@
+use std::fs;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemoryThresholds {
     pub warning_bytes: u64,
@@ -11,6 +13,74 @@ pub struct TabTelemetry {
     pub renderer_bytes: u64,
     pub browser_bytes: u64,
     pub gpu_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TelemetrySource {
+    SyntheticSample,
+    LinuxProcessRss,
+    AggregateProcessRss,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttributionConfidence {
+    TestOnly,
+    Aggregate,
+    ProcessObserved,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemoryAttribution {
+    pub source: TelemetrySource,
+    pub confidence: AttributionConfidence,
+    pub live_mvp_evidence: bool,
+    pub detail: String,
+}
+
+impl MemoryAttribution {
+    #[must_use]
+    pub fn synthetic() -> Self {
+        Self {
+            source: TelemetrySource::SyntheticSample,
+            confidence: AttributionConfidence::TestOnly,
+            live_mvp_evidence: false,
+            detail: "injected memory sample for tests or simulated development".to_string(),
+        }
+    }
+
+    #[must_use]
+    pub fn aggregate_process(process_count: usize) -> Self {
+        Self {
+            source: TelemetrySource::AggregateProcessRss,
+            confidence: AttributionConfidence::Aggregate,
+            live_mvp_evidence: true,
+            detail: format!(
+                "observed aggregate Linux RSS across {process_count} browser-related process(es)"
+            ),
+        }
+    }
+
+    #[must_use]
+    pub fn label(&self) -> String {
+        format!(
+            "source={:?}; confidence={:?}; live_mvp_evidence={}; {}",
+            self.source, self.confidence, self.live_mvp_evidence, self.detail
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProcessMemoryObservation {
+    pub pid: u32,
+    pub command: String,
+    pub rss_bytes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObservedMemoryTelemetry {
+    pub telemetry: TabTelemetry,
+    pub attribution: MemoryAttribution,
+    pub processes: Vec<ProcessMemoryObservation>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +126,8 @@ pub struct RecoveryReport {
     pub tab_id: String,
     pub suspected_cause: String,
     pub captured_bytes: u64,
+    pub attribution: MemoryAttribution,
+    pub process_count: usize,
 }
 
 pub struct MemoryController {
@@ -139,20 +211,110 @@ impl MemoryController {
     }
 
     #[must_use]
-    pub fn capture_recovery_report(&self, telemetry: &TabTelemetry) -> RecoveryReport {
+    pub fn capture_recovery_report(
+        &self,
+        telemetry: &TabTelemetry,
+        attribution: MemoryAttribution,
+    ) -> RecoveryReport {
         RecoveryReport {
             tab_id: telemetry.tab_id.clone(),
             suspected_cause: "suspected-memory-exhaustion".to_string(),
             captured_bytes: telemetry.renderer_bytes
                 + telemetry.browser_bytes
                 + telemetry.gpu_bytes,
+            process_count: 0,
+            attribution,
         }
     }
 }
 
+pub struct LinuxProcessMemoryCollector;
+
+impl LinuxProcessMemoryCollector {
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn collect_for_tab(&self, tab_id: &str) -> ObservedMemoryTelemetry {
+        let mut processes = self.browser_processes();
+        if processes.is_empty() {
+            processes.push(self.current_process_observation());
+        }
+
+        let total_rss = processes.iter().map(|process| process.rss_bytes).sum();
+        ObservedMemoryTelemetry {
+            telemetry: TabTelemetry {
+                tab_id: tab_id.to_string(),
+                renderer_bytes: total_rss,
+                browser_bytes: 0,
+                gpu_bytes: 0,
+            },
+            attribution: MemoryAttribution::aggregate_process(processes.len()),
+            processes,
+        }
+    }
+
+    fn browser_processes(&self) -> Vec<ProcessMemoryObservation> {
+        let Ok(entries) = fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+
+        let mut observations = entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let pid = entry.file_name().to_string_lossy().parse::<u32>().ok()?;
+                let command = fs::read_to_string(format!("/proc/{pid}/cmdline"))
+                    .ok()
+                    .map(|value| value.replace('\0', " "))
+                    .unwrap_or_default();
+                let command_lower = command.to_ascii_lowercase();
+                if !command_lower.contains("webox") && !command_lower.contains("cef") {
+                    return None;
+                }
+                let rss_bytes = read_proc_status_rss_bytes(pid).unwrap_or_default();
+                Some(ProcessMemoryObservation {
+                    pid,
+                    command: command.trim().to_string(),
+                    rss_bytes,
+                })
+            })
+            .collect::<Vec<_>>();
+        observations.sort_by_key(|process| process.pid);
+        observations
+    }
+
+    fn current_process_observation(&self) -> ProcessMemoryObservation {
+        let pid = std::process::id();
+        ProcessMemoryObservation {
+            pid,
+            command: "current webox process".to_string(),
+            rss_bytes: read_proc_status_rss_bytes(pid).unwrap_or_default(),
+        }
+    }
+}
+
+impl Default for LinuxProcessMemoryCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn read_proc_status_rss_bytes(pid: u32) -> Option<u64> {
+    let status = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    status.lines().find_map(|line| {
+        let rest = line.strip_prefix("VmRSS:")?;
+        let kib = rest.split_whitespace().next()?.parse::<u64>().ok()?;
+        Some(kib * 1024)
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{MemoryController, MemoryPressureLevel, TabTelemetry};
+    use super::{
+        AttributionConfidence, LinuxProcessMemoryCollector, MemoryAttribution, MemoryController,
+        MemoryPressureLevel, TabTelemetry, TelemetrySource,
+    };
 
     #[test]
     fn controller_escalates_to_critical_pressure() {
@@ -164,5 +326,29 @@ mod tests {
             gpu_bytes: 10,
         });
         assert_eq!(decision.event.level, MemoryPressureLevel::Critical);
+    }
+
+    #[test]
+    fn linux_collector_observes_current_process_memory() {
+        let collector = LinuxProcessMemoryCollector::new();
+        let observed = collector.collect_for_tab("tab-1");
+
+        assert_eq!(observed.telemetry.tab_id, "tab-1");
+        assert!(observed.attribution.live_mvp_evidence);
+        assert!(!observed.processes.is_empty());
+    }
+
+    #[test]
+    fn attribution_metadata_distinguishes_synthetic_from_observed() {
+        let synthetic = MemoryAttribution::synthetic();
+        let observed = MemoryAttribution::aggregate_process(2);
+
+        assert_eq!(synthetic.source, TelemetrySource::SyntheticSample);
+        assert_eq!(synthetic.confidence, AttributionConfidence::TestOnly);
+        assert!(!synthetic.live_mvp_evidence);
+        assert_eq!(observed.source, TelemetrySource::AggregateProcessRss);
+        assert_eq!(observed.confidence, AttributionConfidence::Aggregate);
+        assert!(observed.live_mvp_evidence);
+        assert!(observed.label().contains("live_mvp_evidence=true"));
     }
 }

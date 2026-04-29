@@ -62,7 +62,7 @@ impl AppConfig {
     pub fn development() -> Self {
         Self {
             startup: BrowserStartupConfig {
-                home_page: "https://webox.dev".to_string(),
+                home_page: "https://example.com".to_string(),
                 max_memory_per_tab_bytes: 8 * 1024 * 1024 * 1024,
                 environment: "development".to_string(),
                 runtime_mode: BrowserRuntimeMode::RealCef,
@@ -74,11 +74,18 @@ impl AppConfig {
             cef: CefRuntimePaths {
                 distribution_root: "third_party/cef/linux-x64".to_string(),
                 framework_dir: "third_party/cef/linux-x64".to_string(),
-                resources_dir: "third_party/cef/linux-x64/resources".to_string(),
+                // CEF Linux minimal distribution places .pak files flat alongside
+                // libcef.so — there is no resources/ subdirectory on Linux.
+                resources_dir: "third_party/cef/linux-x64".to_string(),
                 locales_dir: "third_party/cef/linux-x64/locales".to_string(),
             },
             subprocess: SubprocessLaunchOptions {
-                browser_subprocess_path: "third_party/cef/linux-x64/bin/webox-cef-subprocess"
+                // Use the current executable as the CEF subprocess (self-launch).
+                // CEF re-invokes the binary with internal args; execute_process()
+                // detects this and exits before the UI is initialized.
+                browser_subprocess_path: std::env::current_exe()
+                    .unwrap_or_default()
+                    .display()
                     .to_string(),
                 extra_args: vec!["--enable-logging".to_string()],
                 log_file_path: ".webox/logs/webox-engine.log".to_string(),
@@ -88,6 +95,77 @@ impl AppConfig {
                 data_dir: ".webox/data".to_string(),
                 cache_dir: ".webox/cache".to_string(),
                 log_dir: ".webox/logs".to_string(),
+            },
+        }
+    }
+
+    /// Production config: resolves all paths relative to the directory containing
+    /// the running executable. This allows the binary to be placed anywhere on
+    /// disk and find its CEF assets via the embedded `$ORIGIN` RPATH without
+    /// relying on a fixed CWD.
+    ///
+    /// Asset layout expected next to the binary (CEF Linux flat layout):
+    /// ```text
+    /// webox-browser-app
+    /// libcef.so
+    /// icudtl.dat
+    /// resources.pak
+    /// chrome_100_percent.pak
+    /// chrome_200_percent.pak
+    /// v8_context_snapshot.bin
+    /// locales/
+    ///   en-US.pak
+    ///   …
+    /// ```
+    #[must_use]
+    pub fn production() -> Self {
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+        let exe_path = std::env::current_exe()
+            .unwrap_or_default()
+            .display()
+            .to_string();
+
+        let cef_dir = exe_dir.display().to_string();
+        let data_base = exe_dir.join(".webox");
+
+        Self {
+            startup: BrowserStartupConfig {
+                home_page: "https://example.com".to_string(),
+                max_memory_per_tab_bytes: 8 * 1024 * 1024 * 1024,
+                environment: "production".to_string(),
+                runtime_mode: BrowserRuntimeMode::RealCef,
+                ui_host: BrowserUiHost::Eframe,
+                platform_target: PlatformTarget::LinuxX64,
+                enable_cef_sandbox: false,
+                remote_debugging_port: 0,
+            },
+            cef: CefRuntimePaths {
+                distribution_root: cef_dir.clone(),
+                framework_dir: cef_dir.clone(),
+                // CEF Linux flat layout: .pak files sit alongside libcef.so,
+                // not in a resources/ subdirectory.
+                resources_dir: cef_dir.clone(),
+                locales_dir: exe_dir.join("locales").display().to_string(),
+            },
+            subprocess: SubprocessLaunchOptions {
+                // Self-launch: CEF re-invokes this binary as a subprocess.
+                // execute_process() detects this and exits before UI init.
+                browser_subprocess_path: exe_path,
+                extra_args: vec![],
+                log_file_path: data_base
+                    .join("logs/webox-engine.log")
+                    .display()
+                    .to_string(),
+            },
+            paths: EnvironmentPaths {
+                workspace_root: cef_dir.clone(),
+                data_dir: data_base.join("data").display().to_string(),
+                cache_dir: data_base.join("cache").display().to_string(),
+                log_dir: data_base.join("logs").display().to_string(),
             },
         }
     }

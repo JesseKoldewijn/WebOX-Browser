@@ -19,6 +19,10 @@ Expected structure:
 - `third_party/cef/linux-x64/locales/`
 - `third_party/cef/linux-x64/README.md`
 
+The live MVP readiness check also verifies writable runtime directories for data,
+cache, and logs from the active `AppConfig`. Missing assets are reported as
+startup diagnostics instead of falling back to simulated browsing.
+
 ## Prepare The Staging Area
 
 Run:
@@ -43,3 +47,25 @@ The repository now has a real CEF runtime configuration contract, engine-driven 
 - `cargo run -p webox-browser-app`
 - `cargo run -p webox-workload-harness -- supported`
 - `cargo run -p webox-workload-harness -- constrained`
+
+## Live MVP Modes
+
+- Live mode uses `BrowserRuntimeMode::RealCef` and requires CEF assets,
+  resources, locales, subprocess executable, cache/data/log directories, and
+  remote debugging configuration to be usable.
+- Simulated mode uses `BrowserRuntimeMode::Simulated` for unit tests and local
+  development scaffolding. It is explicitly marked `live_mvp_ready=false` and
+  cannot satisfy live MVP validation.
+- If CEF assets are missing, the browser diagnostics panel and workload harness
+  report `engine-startup-failure` with missing-path details.
+
+## Expected Failure Diagnostics
+
+- Missing CEF distribution root/resources/locales/subprocess: startup reports
+  `RuntimeReadinessState::LiveUnavailable` and lists each missing path.
+- CEF startup or browser creation failure: runtime APIs return an error instead
+  of creating synthetic live tabs.
+- Host surface failure: workload validation reports `host-surface-failure` when
+  rendered frame evidence is missing.
+- Simulated validation: workload validation reports not live-MVP-ready and does
+  not treat simulated output as acceptance evidence.

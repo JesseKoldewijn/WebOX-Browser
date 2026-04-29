@@ -2,19 +2,23 @@ use std::collections::HashMap;
 
 use webox_config::AppConfig;
 use webox_engine::{
-    BrowserInstanceEvent, BrowserInstanceEventKind, BrowserInstanceState, StartupDiagnostics,
-    WeboxEngine,
+    BrowserInstanceEvent, BrowserInstanceEventKind, BrowserInstanceState, HostMouseButton,
+    HostSurfaceInputEvent, RuntimeReadiness, StartupDiagnostics, WeboxEngine,
 };
 use webox_memory::{
-    MemoryController, MemoryPressureLevel, PolicyDecision, RecoveryReport, SupportedSystemReport,
-    TabTelemetry,
+    LinuxProcessMemoryCollector, MemoryAttribution, MemoryController, MemoryPressureLevel,
+    PolicyDecision, RecoveryReport, SupportedSystemReport, TabTelemetry,
 };
-use webox_ui::{BrowserCommand, BrowserWindowModel, SurfaceViewState, TabViewState, WindowId};
+use webox_ui::{
+    BrowserCommand, BrowserWindowModel, SurfaceFrameBuffer, SurfaceInputEvent, SurfaceMouseButton,
+    SurfaceViewState, TabViewState, WindowId,
+};
 
 pub struct HostShell {
     config: AppConfig,
     engine: WeboxEngine,
     memory_controller: MemoryController,
+    memory_collector: LinuxProcessMemoryCollector,
     windows: HashMap<WindowId, BrowserWindowModel>,
     startup_diagnostics: Vec<StartupDiagnostics>,
     recovery_reports: Vec<RecoveryReport>,
@@ -29,6 +33,7 @@ impl HostShell {
             engine: WeboxEngine::new(&config),
             config,
             memory_controller: MemoryController::new(target),
+            memory_collector: LinuxProcessMemoryCollector::new(),
             windows: HashMap::new(),
             startup_diagnostics: Vec::new(),
             recovery_reports: Vec::new(),
@@ -38,6 +43,14 @@ impl HostShell {
 
     pub fn start(&mut self) {
         self.startup_diagnostics.push(self.engine.start());
+        self.sync_engine_events();
+    }
+
+    /// Drive the CEF message loop for one iteration.
+    /// Call this on every UI frame to keep CEF processing network, rendering,
+    /// and IPC messages.
+    pub fn tick(&mut self) {
+        self.engine.tick();
         self.sync_engine_events();
     }
 
@@ -126,6 +139,14 @@ impl HostShell {
         Ok(())
     }
 
+    pub fn reload_tab(&mut self, _window_id: &str, tab_id: &str) -> Result<(), String> {
+        self.engine
+            .reload_browser_instance(tab_id)
+            .map_err(|error| error.message)?;
+        self.sync_engine_events();
+        Ok(())
+    }
+
     pub fn resize_tab_surface(
         &mut self,
         tab_id: &str,
@@ -142,6 +163,18 @@ impl HostShell {
     pub fn focus_tab_surface(&mut self, tab_id: &str, focused: bool) -> Result<(), String> {
         self.engine
             .set_surface_focus(tab_id, focused)
+            .map_err(|error| error.message)?;
+        self.sync_engine_events();
+        Ok(())
+    }
+
+    pub fn dispatch_surface_input(
+        &mut self,
+        tab_id: &str,
+        event: SurfaceInputEvent,
+    ) -> Result<(), String> {
+        self.engine
+            .dispatch_surface_input(tab_id, map_surface_input_event(event))
             .map_err(|error| error.message)?;
         self.sync_engine_events();
         Ok(())
@@ -166,6 +199,32 @@ impl HostShell {
         window_id: &str,
         telemetry: &TabTelemetry,
     ) -> Result<PolicyDecision, String> {
+        self.record_tab_telemetry_with_attribution(
+            window_id,
+            telemetry,
+            MemoryAttribution::synthetic(),
+        )
+    }
+
+    pub fn collect_observed_tab_telemetry(
+        &mut self,
+        window_id: &str,
+        tab_id: &str,
+    ) -> Result<PolicyDecision, String> {
+        let observed = self.memory_collector.collect_for_tab(tab_id);
+        self.record_tab_telemetry_with_attribution(
+            window_id,
+            &observed.telemetry,
+            observed.attribution,
+        )
+    }
+
+    pub fn record_tab_telemetry_with_attribution(
+        &mut self,
+        window_id: &str,
+        telemetry: &TabTelemetry,
+        attribution: MemoryAttribution,
+    ) -> Result<PolicyDecision, String> {
         let decision = self.memory_controller.evaluate(telemetry);
         let label = match decision.event.level {
             MemoryPressureLevel::Normal => None,
@@ -173,13 +232,7 @@ impl HostShell {
             MemoryPressureLevel::Critical => Some("critical memory pressure".to_string()),
             MemoryPressureLevel::Exhausted => Some("memory exhaustion risk".to_string()),
         };
-        let attribution = Some(
-            if matches!(decision.event.level, MemoryPressureLevel::Exhausted) {
-                "fallback: aggregated browser process metrics".to_string()
-            } else {
-                "observed: renderer/browser/gpu telemetry".to_string()
-            },
-        );
+        let attribution_label = Some(attribution.label());
         self.engine
             .update_browser_memory(
                 &telemetry.tab_id,
@@ -190,19 +243,24 @@ impl HostShell {
                 } else {
                     None
                 },
-                attribution.clone(),
+                attribution_label.clone(),
             )
             .map_err(|error| error.message)?;
         let window = self
             .windows
             .get_mut(window_id)
             .ok_or_else(|| format!("Window '{}' was not found", window_id))?;
-        window.set_memory_indicator(&telemetry.tab_id, label, attribution);
+        window.set_memory_indicator(&telemetry.tab_id, label, attribution_label);
         if matches!(decision.event.level, MemoryPressureLevel::Exhausted) {
-            let report = self.memory_controller.capture_recovery_report(telemetry);
+            let report = self
+                .memory_controller
+                .capture_recovery_report(telemetry, attribution);
             window.set_failure_state(
                 &telemetry.tab_id,
-                Some("Tab ended due to suspected memory exhaustion".to_string()),
+                Some(format!(
+                    "Tab ended due to suspected memory exhaustion ({})",
+                    report.attribution.label()
+                )),
             );
             self.recovery_reports.push(report);
         }
@@ -217,14 +275,7 @@ impl HostShell {
     ) -> Result<(), String> {
         match command {
             BrowserCommand::Navigate { tab_id, url } => self.navigate_tab(window_id, &tab_id, &url),
-            BrowserCommand::Reload { tab_id } => {
-                let current_url = self
-                    .engine
-                    .browser_instance(&tab_id)
-                    .map(|tab| tab.url.clone())
-                    .ok_or_else(|| format!("Tab '{}' was not found", tab_id))?;
-                self.navigate_tab(window_id, &tab_id, &current_url)
-            }
+            BrowserCommand::Reload { tab_id } => self.reload_tab(window_id, &tab_id),
             BrowserCommand::Back { tab_id } => self.go_back(window_id, &tab_id),
             BrowserCommand::Forward { tab_id } => self.go_forward(window_id, &tab_id),
             BrowserCommand::ActivateTab { tab_id } => {
@@ -254,6 +305,16 @@ impl HostShell {
     #[must_use]
     pub fn startup_diagnostics(&self) -> &[StartupDiagnostics] {
         &self.startup_diagnostics
+    }
+
+    #[must_use]
+    pub fn runtime_readiness(&self) -> &RuntimeReadiness {
+        self.engine.runtime_readiness()
+    }
+
+    #[must_use]
+    pub fn live_mvp_ready(&self) -> bool {
+        self.engine.live_mvp_ready()
     }
 
     #[must_use]
@@ -299,6 +360,8 @@ impl HostShell {
             failure_state: snapshot.failure_state.clone(),
             memory_attribution: snapshot.memory_attribution.clone(),
             status_text: snapshot.status_text.clone(),
+            can_go_back: snapshot.can_go_back,
+            can_go_forward: snapshot.can_go_forward,
             surface: SurfaceViewState {
                 surface_id: snapshot.surface.surface_id.clone(),
                 width: snapshot.surface.width,
@@ -306,6 +369,16 @@ impl HostShell {
                 focused: snapshot.surface.focused,
                 frame_token: snapshot.surface.frame_token,
                 frame_label: snapshot.surface.last_frame_label.clone(),
+                render_evidence: snapshot.surface.render_evidence.clone(),
+                frame_buffer: snapshot.surface.frame_buffer.as_ref().map(|buffer| {
+                    SurfaceFrameBuffer {
+                        width: buffer.width,
+                        height: buffer.height,
+                        bgra: buffer.bgra.clone(),
+                    }
+                }),
+                damage_events: snapshot.surface.damage_events,
+                host_surface_failure: snapshot.surface.host_surface_failure.clone(),
             },
         };
 
@@ -328,6 +401,48 @@ impl HostShell {
     }
 }
 
+fn map_surface_input_event(event: SurfaceInputEvent) -> HostSurfaceInputEvent {
+    match event {
+        SurfaceInputEvent::PointerMove { x, y } => HostSurfaceInputEvent::PointerMove { x, y },
+        SurfaceInputEvent::PointerButton {
+            x,
+            y,
+            button,
+            pressed,
+            click_count,
+        } => HostSurfaceInputEvent::PointerButton {
+            x,
+            y,
+            button: match button {
+                SurfaceMouseButton::Left => HostMouseButton::Left,
+                SurfaceMouseButton::Middle => HostMouseButton::Middle,
+                SurfaceMouseButton::Right => HostMouseButton::Right,
+            },
+            pressed,
+            click_count,
+        },
+        SurfaceInputEvent::Wheel {
+            x,
+            y,
+            delta_x,
+            delta_y,
+        } => HostSurfaceInputEvent::Wheel {
+            x,
+            y,
+            delta_x,
+            delta_y,
+        },
+        SurfaceInputEvent::Key { key_code, pressed } => {
+            HostSurfaceInputEvent::Key { key_code, pressed }
+        }
+        SurfaceInputEvent::Text { text } => HostSurfaceInputEvent::Text { text },
+        SurfaceInputEvent::Focus { focused } => HostSurfaceInputEvent::Focus { focused },
+        SurfaceInputEvent::Resize { width, height } => {
+            HostSurfaceInputEvent::Resize { width, height }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::HostShell;
@@ -337,7 +452,7 @@ mod tests {
 
     #[test]
     fn host_shell_starts_and_opens_tabs() {
-        let mut shell = HostShell::new(AppConfig::development());
+        let mut shell = HostShell::new(AppConfig::simulated());
         shell.start();
         let window = shell.create_window("window-1");
         let tab = shell.open_tab(&window, "https://webox.dev").unwrap();
@@ -359,7 +474,7 @@ mod tests {
 
     #[test]
     fn host_shell_dispatches_navigation_commands() {
-        let mut shell = HostShell::new(AppConfig::development());
+        let mut shell = HostShell::new(AppConfig::simulated());
         shell.start();
         let window = shell.create_window("window-1");
         let tab = shell.open_tab(&window, "https://webox.dev").unwrap();
@@ -419,6 +534,48 @@ mod tests {
         assert_eq!(
             shell.windows()[&window].tabs[0].url,
             "https://example.com/two"
+        );
+    }
+
+    #[test]
+    fn host_shell_surfaces_live_readiness_failures() {
+        let mut shell = HostShell::new(AppConfig::development());
+        shell.start();
+        let window = shell.create_window("window-1");
+
+        let result = shell.open_tab(&window, "https://webox.dev");
+
+        assert!(result.is_err());
+        assert!(!shell.live_mvp_ready());
+        assert!(!shell.runtime_readiness().missing_paths.is_empty());
+        assert_eq!(shell.startup_diagnostics()[0].component, "engine.readiness");
+    }
+
+    #[test]
+    fn host_shell_records_observed_memory_attribution() {
+        let mut shell = HostShell::new(AppConfig::simulated());
+        shell.start();
+        let window = shell.create_window("window-1");
+        let tab = shell.open_tab(&window, "https://webox.dev").unwrap();
+
+        shell.collect_observed_tab_telemetry(&window, &tab).unwrap();
+
+        let tab_state = shell.windows()[&window]
+            .tabs
+            .iter()
+            .find(|candidate| candidate.id == tab)
+            .unwrap();
+        assert!(
+            tab_state
+                .memory_attribution
+                .as_deref()
+                .is_some_and(|attribution| attribution.contains("AggregateProcessRss"))
+        );
+        assert!(
+            tab_state
+                .memory_attribution
+                .as_deref()
+                .is_some_and(|attribution| attribution.contains("live_mvp_evidence=true"))
         );
     }
 }

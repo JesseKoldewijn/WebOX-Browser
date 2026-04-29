@@ -1,8 +1,11 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use webox_config::{AppConfig, BrowserRuntimeMode};
-use webox_memory::TabTelemetry;
+use webox_engine::{
+    BrowserInstanceEvent, BrowserInstanceEventKind, HostMouseButton, HostSurfaceInputEvent,
+};
 use webox_runtime_api::{EmbeddedRuntime, EmbeddedRuntimeConfig, RuntimeBrowserSnapshot};
 
 #[derive(Clone, Copy)]
@@ -15,28 +18,57 @@ struct WorkloadCase {
     browser_bytes: u64,
     gpu_bytes: u64,
     compatibility: &'static str,
-    expected_outcome: WorkloadExpectation,
+    proof: WorkloadProof,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WorkloadExpectation {
-    Success,
-    CompatibilityFailure,
-    EngineFailure,
+enum WorkloadProof {
+    RenderOnly,
+    InputInteraction,
+    TabState,
+    MemoryPressure,
+    NavigationFailure,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RuntimeOutcome {
     Success,
     CompatibilityFailure,
-    EngineFailure,
+    EngineStartupFailure,
+    HostSurfaceFailure,
+    BrowserCrash,
+    Timeout,
     ConstrainedMemory,
+}
+
+struct WorkloadObservation {
+    workload: WorkloadCase,
+    outcome: RuntimeOutcome,
+    failure_class: &'static str,
+    final_url: String,
+    title_signal: String,
+    render_proof: String,
+    input_proof: Option<String>,
+    elapsed_ms: u128,
+    events: Vec<BrowserInstanceEvent>,
+    snapshot: RuntimeBrowserSnapshot,
 }
 
 const GIB: u64 = 1024 * 1024 * 1024;
 const MIB: u64 = 1024 * 1024;
 
-const WORKLOADS: [WorkloadCase; 5] = [
+const WORKLOADS: [WorkloadCase; 7] = [
+    WorkloadCase {
+        id: "standards-rendering",
+        category: "standards-rendering",
+        title: "Standards Rendering Fixture",
+        fixture_path: "validation/workloads/standards-rendering.html",
+        renderer_bytes: 512 * MIB,
+        browser_bytes: 128 * MIB,
+        gpu_bytes: 64 * MIB,
+        compatibility: "loads deterministic HTML, CSS, DOM, media query, and paint proof",
+        proof: WorkloadProof::RenderOnly,
+    },
     WorkloadCase {
         id: "large-dom",
         category: "large-data-visualization",
@@ -46,7 +78,29 @@ const WORKLOADS: [WorkloadCase; 5] = [
         browser_bytes: 512 * MIB,
         gpu_bytes: 128 * MIB,
         compatibility: "loads representative large DOM and CSS grid content",
-        expected_outcome: WorkloadExpectation::Success,
+        proof: WorkloadProof::RenderOnly,
+    },
+    WorkloadCase {
+        id: "interaction",
+        category: "input-interaction",
+        title: "Interaction Fixture",
+        fixture_path: "validation/workloads/interaction-fixture.html",
+        renderer_bytes: 768 * MIB,
+        browser_bytes: 128 * MIB,
+        gpu_bytes: 64 * MIB,
+        compatibility: "proves routed click, text, scroll, focus, and resize evidence",
+        proof: WorkloadProof::InputInteraction,
+    },
+    WorkloadCase {
+        id: "tab-state",
+        category: "tab-state-preservation",
+        title: "Tab State Fixture",
+        fixture_path: "validation/workloads/tab-state-preservation.html",
+        renderer_bytes: 512 * MIB,
+        browser_bytes: 128 * MIB,
+        gpu_bytes: 64 * MIB,
+        compatibility: "proves local tab state and browser storage surfaces are active",
+        proof: WorkloadProof::TabState,
     },
     WorkloadCase {
         id: "webgl-canvas",
@@ -57,7 +111,7 @@ const WORKLOADS: [WorkloadCase; 5] = [
         browser_bytes: 768 * MIB,
         gpu_bytes: GIB,
         compatibility: "renders canvas and GPU-oriented content representative of Unity WebGL scenes",
-        expected_outcome: WorkloadExpectation::Success,
+        proof: WorkloadProof::RenderOnly,
     },
     WorkloadCase {
         id: "worker-memory",
@@ -68,29 +122,18 @@ const WORKLOADS: [WorkloadCase; 5] = [
         browser_bytes: GIB,
         gpu_bytes: 256 * MIB,
         compatibility: "exercises worker and memory allocation patterns found in WASM-heavy tools",
-        expected_outcome: WorkloadExpectation::Success,
+        proof: WorkloadProof::MemoryPressure,
     },
     WorkloadCase {
-        id: "observable-plot",
-        category: "large-data-visualization",
-        title: "Observable Plot demo",
-        fixture_path: "https://observablehq.com/plot/",
-        renderer_bytes: 4 * GIB,
-        browser_bytes: GIB,
-        gpu_bytes: 512 * MIB,
-        compatibility: "represents a modern interactive data visualization workload",
-        expected_outcome: WorkloadExpectation::CompatibilityFailure,
-    },
-    WorkloadCase {
-        id: "figma-like-app",
-        category: "modern-heavy-web-app",
-        title: "Figma-style collaborative app simulation",
-        fixture_path: "https://www.figma.com/",
-        renderer_bytes: 7 * GIB,
-        browser_bytes: GIB,
-        gpu_bytes: 512 * MIB,
-        compatibility: "stands in for a modern heavy web application with multi-surface rendering",
-        expected_outcome: WorkloadExpectation::EngineFailure,
+        id: "navigation-failure",
+        category: "navigation-failure",
+        title: "Intentional Navigation Failure",
+        fixture_path: "http://127.0.0.1:9/webox-intentional-failure",
+        renderer_bytes: 256 * MIB,
+        browser_bytes: 128 * MIB,
+        gpu_bytes: 32 * MIB,
+        compatibility: "proves observed navigation failure classification",
+        proof: WorkloadProof::NavigationFailure,
     },
 ];
 
@@ -131,7 +174,7 @@ fn main() {
     println!("Wrote workload harness report to {}", output_path.display());
 }
 
-fn run_harness(config: &HarnessConfig) -> String {
+pub(crate) fn run_harness(config: &HarnessConfig) -> String {
     let mut app_config = AppConfig::development();
     app_config.startup.runtime_mode = config.runtime_mode;
     let mut runtime = EmbeddedRuntime::new(EmbeddedRuntimeConfig {
@@ -139,6 +182,7 @@ fn run_harness(config: &HarnessConfig) -> String {
         available_memory_bytes: config.available_memory_bytes,
     });
     let system_report = runtime.system_report(config.available_memory_bytes);
+    let readiness = runtime.runtime_readiness().clone();
 
     let mut lines = vec![
         "# webox workload harness report".to_string(),
@@ -154,96 +198,299 @@ fn run_harness(config: &HarnessConfig) -> String {
         format!("- Meets target: {}", system_report.meets_target),
         format!("- Summary: {}", system_report.summary),
         format!("- Runtime mode: {:?}", config.runtime_mode),
+        format!("- Live MVP ready: {}", runtime.live_mvp_ready()),
+        format!("- Runtime readiness: {:?}", readiness.state),
+        format!("- Runtime readiness summary: {}", readiness.summary),
+        format!(
+            "- Missing runtime paths: {}",
+            if readiness.missing_paths.is_empty() {
+                "none".to_string()
+            } else {
+                readiness.missing_paths.join(", ")
+            }
+        ),
         String::new(),
         "## Workloads".to_string(),
         String::new(),
     ];
 
-    for workload in WORKLOADS {
-        let descriptor = runtime
-            .create_browser_instance(workload.fixture_path)
-            .expect("should create runtime browser instance");
-        runtime
-            .navigate_browser_instance(&descriptor.id, workload.fixture_path)
-            .expect("should navigate runtime browser instance");
-        runtime
-            .resize_browser_surface(&descriptor.id, 1440, 900)
-            .expect("should resize runtime browser surface");
-
-        let outcome = classify_outcome(workload, system_report.meets_target);
-        apply_outcome(&mut runtime, &descriptor.id, workload, outcome)
-            .expect("should apply runtime outcome");
-
-        let snapshot = runtime
-            .apply_memory_sample(&TabTelemetry {
-                tab_id: descriptor.id.clone(),
-                renderer_bytes: workload.renderer_bytes,
-                browser_bytes: workload.browser_bytes,
-                gpu_bytes: workload.gpu_bytes,
-            })
-            .expect("should apply memory sample");
-        let events = runtime.drain_events();
-
-        append_workload_result(
-            &mut lines,
-            workload,
-            outcome,
-            &snapshot,
-            &events,
-            system_report.meets_target,
+    if !runtime.live_mvp_ready() {
+        lines.push(
+            "Live MVP validation did not run workloads because the runtime is not live-MVP-ready."
+                .to_string(),
         );
+        lines.push(
+            "This is a validation failure for live MVP mode, not a synthetic success.".to_string(),
+        );
+        lines.push(format!(
+            "- Outcome: {:?}",
+            RuntimeOutcome::EngineStartupFailure
+        ));
+        lines.push(format!(
+            "- Failure class: {}",
+            failure_class(RuntimeOutcome::EngineStartupFailure)
+        ));
+        if matches!(config.runtime_mode, BrowserRuntimeMode::Simulated) {
+            lines.push(
+                "- Simulation failure: simulated runtime cannot satisfy live MVP validation."
+                    .to_string(),
+            );
+        }
+        return lines.join("\n");
+    }
 
-        runtime
-            .close_browser_instance(&descriptor.id)
-            .expect("should close runtime browser instance");
-        let _ = runtime.drain_events();
+    if matches!(config.runtime_mode, BrowserRuntimeMode::Simulated) {
+        lines.push("Live MVP validation failed: runtime mode is simulated.".to_string());
+        return lines.join("\n");
+    }
+
+    for workload in WORKLOADS {
+        let observation = observe_workload(
+            &mut runtime,
+            workload,
+            system_report.meets_target,
+            Duration::from_secs(10),
+        );
+        append_workload_result(&mut lines, &observation, system_report.meets_target);
     }
 
     lines.join("\n")
 }
 
-fn classify_outcome(workload: WorkloadCase, system_meets_target: bool) -> RuntimeOutcome {
-    if !system_meets_target
-        && workload.renderer_bytes + workload.browser_bytes + workload.gpu_bytes > 6 * GIB
-    {
-        RuntimeOutcome::ConstrainedMemory
-    } else {
-        match workload.expected_outcome {
-            WorkloadExpectation::Success => RuntimeOutcome::Success,
-            WorkloadExpectation::CompatibilityFailure => RuntimeOutcome::CompatibilityFailure,
-            WorkloadExpectation::EngineFailure => RuntimeOutcome::EngineFailure,
+fn observe_workload(
+    runtime: &mut EmbeddedRuntime,
+    workload: WorkloadCase,
+    system_meets_target: bool,
+    timeout: Duration,
+) -> WorkloadObservation {
+    let started = Instant::now();
+    let fixture_url = resolve_fixture_url(workload.fixture_path);
+    let descriptor = runtime
+        .create_browser_instance(&fixture_url)
+        .expect("should create runtime browser instance");
+    runtime
+        .navigate_browser_instance(&descriptor.id, &fixture_url)
+        .expect("should navigate runtime browser instance");
+    runtime
+        .resize_browser_surface(&descriptor.id, 1440, 900)
+        .expect("should resize runtime browser surface");
+
+    if matches!(workload.proof, WorkloadProof::InputInteraction) {
+        dispatch_interaction_proof(runtime, &descriptor.id);
+    }
+
+    let wait_events = wait_for_observed_result(runtime, timeout);
+
+    let snapshot = runtime
+        .apply_observed_memory_sample(&descriptor.id)
+        .expect("should apply observed memory sample");
+    let mut events = wait_events;
+    events.extend(runtime.drain_events());
+    let elapsed = started.elapsed();
+    let outcome = classify_observed_outcome(
+        workload,
+        &snapshot,
+        &events,
+        system_meets_target,
+        elapsed >= timeout,
+    );
+    let failure_class = failure_class(outcome);
+    let final_url = snapshot.browser.url.clone();
+    let title_signal = snapshot.browser.title.clone();
+    let render_proof = snapshot
+        .browser
+        .surface
+        .render_evidence
+        .clone()
+        .unwrap_or_else(|| "missing render evidence".to_string());
+    let input_proof = matches!(workload.proof, WorkloadProof::InputInteraction).then(|| {
+        if input_proof_observed(&events) {
+            "pointer, click, wheel, focus, resize, and text input were routed and observed"
+                .to_string()
+        } else {
+            "input proof missing explicit routed input observations".to_string()
         }
+    });
+
+    runtime
+        .close_browser_instance(&descriptor.id)
+        .expect("should close runtime browser instance");
+    let _ = runtime.drain_events();
+
+    WorkloadObservation {
+        workload,
+        outcome,
+        failure_class,
+        final_url,
+        title_signal,
+        render_proof,
+        input_proof,
+        elapsed_ms: elapsed.as_millis(),
+        events,
+        snapshot,
     }
 }
 
-fn apply_outcome(
-    runtime: &mut EmbeddedRuntime,
-    browser_id: &str,
+fn classify_observed_outcome(
     workload: WorkloadCase,
-    outcome: RuntimeOutcome,
-) -> Result<(), String> {
-    match outcome {
-        RuntimeOutcome::Success | RuntimeOutcome::ConstrainedMemory => {
-            runtime.finish_navigation(browser_id, workload.title)
-        }
-        RuntimeOutcome::CompatibilityFailure => runtime.fail_navigation(
-            browser_id,
-            "Compatibility limitation detected while running workload",
-        ),
-        RuntimeOutcome::EngineFailure => {
-            runtime.fail_navigation(browser_id, "Engine or host surface failure interrupted run")
-        }
+    snapshot: &RuntimeBrowserSnapshot,
+    events: &[BrowserInstanceEvent],
+    system_meets_target: bool,
+    timed_out: bool,
+) -> RuntimeOutcome {
+    if timed_out {
+        return RuntimeOutcome::Timeout;
     }
+    if events
+        .iter()
+        .any(|event| event.kind == BrowserInstanceEventKind::Crashed)
+    {
+        return RuntimeOutcome::BrowserCrash;
+    }
+    if snapshot.browser.surface.host_surface_failure.is_some()
+        || snapshot.browser.surface.render_evidence.is_none()
+    {
+        return RuntimeOutcome::HostSurfaceFailure;
+    }
+    if events
+        .iter()
+        .any(|event| event.kind == BrowserInstanceEventKind::NavigationFailed)
+    {
+        return RuntimeOutcome::CompatibilityFailure;
+    }
+    if !system_meets_target
+        && workload.renderer_bytes + workload.browser_bytes + workload.gpu_bytes > 6 * GIB
+    {
+        return RuntimeOutcome::ConstrainedMemory;
+    }
+    RuntimeOutcome::Success
+}
+
+fn wait_for_observed_result(
+    runtime: &mut EmbeddedRuntime,
+    timeout: Duration,
+) -> Vec<BrowserInstanceEvent> {
+    let started = Instant::now();
+    let mut events = Vec::new();
+    while started.elapsed() < timeout {
+        let batch = runtime.drain_events();
+        let reached_terminal_observation = batch.iter().any(|event| {
+            matches!(
+                event.kind,
+                BrowserInstanceEventKind::LoadFinished
+                    | BrowserInstanceEventKind::NavigationFailed
+                    | BrowserInstanceEventKind::Crashed
+                    | BrowserInstanceEventKind::SurfaceUpdated
+            )
+        });
+        events.extend(batch);
+        if reached_terminal_observation {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    events
+}
+
+fn dispatch_interaction_proof(runtime: &mut EmbeddedRuntime, browser_id: &str) {
+    let _ =
+        runtime.dispatch_surface_input(browser_id, HostSurfaceInputEvent::Focus { focused: true });
+    let _ = runtime.dispatch_surface_input(
+        browser_id,
+        HostSurfaceInputEvent::Resize {
+            width: 1440,
+            height: 900,
+        },
+    );
+    let _ = runtime.dispatch_surface_input(
+        browser_id,
+        HostSurfaceInputEvent::PointerMove { x: 96, y: 96 },
+    );
+    let _ = runtime.dispatch_surface_input(
+        browser_id,
+        HostSurfaceInputEvent::PointerButton {
+            x: 96,
+            y: 96,
+            button: HostMouseButton::Left,
+            pressed: true,
+            click_count: 1,
+        },
+    );
+    let _ = runtime.dispatch_surface_input(
+        browser_id,
+        HostSurfaceInputEvent::PointerButton {
+            x: 96,
+            y: 96,
+            button: HostMouseButton::Left,
+            pressed: false,
+            click_count: 1,
+        },
+    );
+    let _ = runtime.dispatch_surface_input(
+        browser_id,
+        HostSurfaceInputEvent::Text {
+            text: "webox-input-proof".to_string(),
+        },
+    );
+    let _ = runtime.dispatch_surface_input(
+        browser_id,
+        HostSurfaceInputEvent::Wheel {
+            x: 128,
+            y: 128,
+            delta_x: 0,
+            delta_y: -240,
+        },
+    );
+}
+
+fn input_proof_observed(events: &[BrowserInstanceEvent]) -> bool {
+    let summaries = events
+        .iter()
+        .map(|event| event.summary.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    summaries.contains("focus input")
+        && summaries.contains("resize input")
+        && summaries.contains("pointer move")
+        && summaries.contains("pointer button")
+        && summaries.contains("text input")
+        && summaries.contains("wheel input")
+}
+
+fn failure_class(outcome: RuntimeOutcome) -> &'static str {
+    match outcome {
+        RuntimeOutcome::Success => "success",
+        RuntimeOutcome::CompatibilityFailure => "compatibility-failure",
+        RuntimeOutcome::EngineStartupFailure => "engine-startup-failure",
+        RuntimeOutcome::HostSurfaceFailure => "host-surface-failure",
+        RuntimeOutcome::BrowserCrash => "browser-crash",
+        RuntimeOutcome::Timeout => "timeout",
+        RuntimeOutcome::ConstrainedMemory => "constrained-memory",
+    }
+}
+
+fn resolve_fixture_url(fixture_path: &str) -> String {
+    if fixture_path.starts_with("http://") || fixture_path.starts_with("https://") {
+        return fixture_path.to_string();
+    }
+    let path = PathBuf::from(fixture_path);
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+    format!("file://{}", absolute.display())
 }
 
 fn append_workload_result(
     lines: &mut Vec<String>,
-    workload: WorkloadCase,
-    outcome: RuntimeOutcome,
-    snapshot: &RuntimeBrowserSnapshot,
-    events: &[webox_engine::BrowserInstanceEvent],
+    observation: &WorkloadObservation,
     system_meets_target: bool,
 ) {
+    let workload = observation.workload;
+    let snapshot = &observation.snapshot;
     lines.push(format!("### {}", workload.title));
     lines.push(format!("- Workload id: {}", workload.id));
     lines.push(format!("- Category: {}", workload.category));
@@ -251,7 +498,18 @@ fn append_workload_result(
     lines.push(format!("- Browser instance: {}", snapshot.browser.id));
     lines.push(format!("- Runtime backend: {:?}", snapshot.browser.backend));
     lines.push(format!("- Compatibility note: {}", workload.compatibility));
-    lines.push(format!("- Outcome: {:?}", outcome));
+    lines.push(format!("- Outcome: {:?}", observation.outcome));
+    lines.push(format!("- Failure class: {}", observation.failure_class));
+    lines.push(format!("- Final URL: {}", observation.final_url));
+    lines.push(format!(
+        "- Title/readiness signal: {}",
+        observation.title_signal
+    ));
+    lines.push(format!("- Render proof: {}", observation.render_proof));
+    if let Some(input_proof) = &observation.input_proof {
+        lines.push(format!("- Input proof: {input_proof}"));
+    }
+    lines.push(format!("- Elapsed ms: {}", observation.elapsed_ms));
     lines.push(format!(
         "- Memory total bytes: {}",
         snapshot.policy_decision.event.total_bytes
@@ -300,7 +558,8 @@ fn append_workload_result(
     ));
     lines.push(format!(
         "- Observed events: {}",
-        events
+        observation
+            .events
             .iter()
             .map(|event| format!("{:?}", event.kind))
             .collect::<Vec<_>>()
@@ -319,7 +578,16 @@ fn append_workload_result(
 
 #[cfg(test)]
 mod tests {
-    use super::{RuntimeOutcome, WorkloadCase, WorkloadExpectation, classify_outcome};
+    use super::{
+        HarnessConfig, RuntimeOutcome, WorkloadCase, WorkloadProof, classify_observed_outcome,
+        run_harness,
+    };
+    use webox_config::BrowserRuntimeMode;
+    use webox_engine::{
+        BrowserInstanceState, BrowserSurfaceRenderMode, BrowserSurfaceState, RuntimeBackend,
+    };
+    use webox_memory::{MemoryAttribution, MemoryController, TabTelemetry};
+    use webox_runtime_api::RuntimeBrowserSnapshot;
 
     #[test]
     fn constrained_systems_are_classified_explicitly() {
@@ -332,12 +600,110 @@ mod tests {
             browser_bytes: 1024,
             gpu_bytes: 1024,
             compatibility: "heavy",
-            expected_outcome: WorkloadExpectation::Success,
+            proof: WorkloadProof::MemoryPressure,
         };
+        let snapshot = test_snapshot("tab-1", Some("painted".to_string()));
 
         assert_eq!(
-            classify_outcome(workload, false),
+            classify_observed_outcome(workload, &snapshot, &[], false, false),
             RuntimeOutcome::ConstrainedMemory
         );
+    }
+
+    #[test]
+    fn missing_render_evidence_is_host_surface_failure() {
+        let workload = WorkloadCase {
+            id: "render",
+            category: "render",
+            title: "Render",
+            fixture_path: "https://example.com",
+            renderer_bytes: 1,
+            browser_bytes: 1,
+            gpu_bytes: 1,
+            compatibility: "render",
+            proof: WorkloadProof::RenderOnly,
+        };
+        let snapshot = test_snapshot("tab-1", None);
+
+        assert_eq!(
+            classify_observed_outcome(workload, &snapshot, &[], true, false),
+            RuntimeOutcome::HostSurfaceFailure
+        );
+    }
+
+    #[test]
+    fn navigation_failure_requires_observed_event() {
+        let workload = WorkloadCase {
+            id: "navigation-failure",
+            category: "navigation-failure",
+            title: "Navigation Failure",
+            fixture_path: "http://127.0.0.1:9/failure",
+            renderer_bytes: 1,
+            browser_bytes: 1,
+            gpu_bytes: 1,
+            compatibility: "failure",
+            proof: WorkloadProof::NavigationFailure,
+        };
+        let snapshot = test_snapshot("tab-1", Some("painted".to_string()));
+
+        assert_eq!(
+            classify_observed_outcome(workload, &snapshot, &[], true, false),
+            RuntimeOutcome::Success
+        );
+    }
+
+    #[test]
+    fn harness_report_classifies_missing_live_runtime_as_startup_failure() {
+        let report = run_harness(&HarnessConfig {
+            available_memory_bytes: 16 * 1024 * 1024 * 1024,
+            output_path: ".webox/validation/test.md",
+            runtime_mode: BrowserRuntimeMode::RealCef,
+        });
+
+        assert!(report.contains("Live MVP validation did not run workloads"));
+        assert!(report.contains("EngineStartupFailure"));
+        assert!(report.contains("engine-startup-failure"));
+        assert!(report.contains("not a synthetic success"));
+    }
+
+    fn test_snapshot(tab_id: &str, render_evidence: Option<String>) -> RuntimeBrowserSnapshot {
+        let telemetry = TabTelemetry {
+            tab_id: tab_id.to_string(),
+            renderer_bytes: 1,
+            browser_bytes: 1,
+            gpu_bytes: 1,
+        };
+        RuntimeBrowserSnapshot {
+            browser: BrowserInstanceState {
+                id: tab_id.to_string(),
+                url: "https://example.com".to_string(),
+                title: "Example".to_string(),
+                is_loading: false,
+                backend: RuntimeBackend::Cef,
+                memory_usage_bytes: 3,
+                memory_indicator: None,
+                failure_state: None,
+                memory_attribution: Some(MemoryAttribution::aggregate_process(1).label()),
+                surface: BrowserSurfaceState {
+                    surface_id: format!("surface-{tab_id}"),
+                    render_mode: BrowserSurfaceRenderMode::CefOffscreen,
+                    width: 1440,
+                    height: 900,
+                    focused: true,
+                    frame_token: 1,
+                    last_frame_label: "frame".to_string(),
+                    render_evidence,
+                    frame_buffer: None,
+                    damage_events: 1,
+                    host_surface_failure: None,
+                },
+                history: vec!["https://example.com".to_string()],
+                history_index: 0,
+                status_text: "loaded".to_string(),
+                can_go_back: false,
+                can_go_forward: false,
+            },
+            policy_decision: MemoryController::new(100).evaluate(&telemetry),
+        }
     }
 }
