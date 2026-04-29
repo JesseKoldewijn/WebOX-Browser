@@ -171,7 +171,7 @@ fn stage_runtime_files(src: &Path, dst: &Path) -> anyhow::Result<()> {
     if dst
         .join("locales")
         .to_str()
-        .map_or(false, |_| src.join("locales").exists())
+        .is_some_and(|_| src.join("locales").exists())
     {
         fs::create_dir_all(dst.join("locales"))?;
     }

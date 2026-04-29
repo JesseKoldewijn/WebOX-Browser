@@ -578,8 +578,8 @@ impl BrowserApp {
                     );
                 }
                 egui::Event::MouseWheel { delta, .. } => {
-                    if let Some(pos) = ui.ctx().pointer_hover_pos() {
-                        if rect.contains(pos) {
+                    if let Some(pos) = ui.ctx().pointer_hover_pos()
+                        && rect.contains(pos) {
                             let local = pos - rect.min;
                             let _ = self.shell.dispatch_surface_input(
                                 tab_id,
@@ -591,7 +591,6 @@ impl BrowserApp {
                                 },
                             );
                         }
-                    }
                 }
                 egui::Event::Key { key, pressed, .. } => {
                     // Only forward to CEF when no egui widget (e.g. address bar)

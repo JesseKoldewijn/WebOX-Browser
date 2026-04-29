@@ -621,11 +621,10 @@ fn detect_runtime_environment() -> RuntimeEnvironment {
     {
         // WSL sets "microsoft" (case-insensitive) in /proc/version.
         // This is the canonical detection method used by most tooling.
-        if let Ok(version) = std::fs::read_to_string("/proc/version") {
-            if version.to_ascii_lowercase().contains("microsoft") {
+        if let Ok(version) = std::fs::read_to_string("/proc/version")
+            && version.to_ascii_lowercase().contains("microsoft") {
                 return RuntimeEnvironment::Wsl;
             }
-        }
         RuntimeEnvironment::Linux
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -1016,12 +1015,11 @@ impl WeboxEngine {
         url: &str,
     ) -> Result<(), EngineError> {
         let is_live = self.live_browser_instances.contains_key(browser_id);
-        if let Some(live) = self.live_browser_instances.get(browser_id) {
-            if let Some(frame) = live.browser.main_frame() {
+        if let Some(live) = self.live_browser_instances.get(browser_id)
+            && let Some(frame) = live.browser.main_frame() {
                 let cef_url = CefString::from(url);
                 frame.load_url(Some(&cef_url));
             }
-        }
         let backend = {
             let instance = self.browser_instance_mut(browser_id)?;
             instance.url = url.to_string();
@@ -1094,8 +1092,8 @@ impl WeboxEngine {
                 );
             }
             other => {
-                if let Some(live) = self.live_browser_instances.get(browser_id) {
-                    if let Some(host) = live.browser.host() {
+                if let Some(live) = self.live_browser_instances.get(browser_id)
+                    && let Some(host) = live.browser.host() {
                         match other {
                             HostSurfaceInputEvent::PointerMove { x, y } => {
                                 host.send_mouse_move_event(
@@ -1161,7 +1159,6 @@ impl WeboxEngine {
                             | HostSurfaceInputEvent::Resize { .. } => {}
                         }
                     }
-                }
                 if let Ok(instance) = self.browser_instance_mut(browser_id) {
                     instance.status_text = format!("Forwarded host surface input: {:?}", event);
                 }
@@ -1254,11 +1251,10 @@ impl WeboxEngine {
         browser_id: &str,
         message: &str,
     ) -> Result<(), EngineError> {
-        if let Some(live) = self.live_browser_instances.get(browser_id) {
-            if let Some(host) = live.browser.host() {
+        if let Some(live) = self.live_browser_instances.get(browser_id)
+            && let Some(host) = live.browser.host() {
                 host.was_resized();
             }
-        }
         let instance = self.browser_instance_mut(browser_id)?;
         instance.is_loading = false;
         instance.failure_state = Some(message.to_string());
@@ -1439,11 +1435,10 @@ impl WeboxEngine {
         browser_id: &str,
         focused: bool,
     ) -> Result<(), EngineError> {
-        if let Some(live) = self.live_browser_instances.get(browser_id) {
-            if let Some(host) = live.browser.host() {
+        if let Some(live) = self.live_browser_instances.get(browser_id)
+            && let Some(host) = live.browser.host() {
                 host.set_focus(focused as i32);
             }
-        }
         let instance = self.browser_instance_mut(browser_id)?;
         instance.surface.focused = focused;
         instance.status_text = if focused {
@@ -1473,11 +1468,10 @@ impl WeboxEngine {
                 removed.backend, browser_id
             ),
         });
-        if let Some(live) = self.live_browser_instances.remove(browser_id) {
-            if let Some(host) = live.browser.host() {
+        if let Some(live) = self.live_browser_instances.remove(browser_id)
+            && let Some(host) = live.browser.host() {
                 host.close_browser(1);
             }
-        }
         self.pending_events.push(BrowserInstanceEvent {
             browser_id: browser_id.to_string(),
             kind: BrowserInstanceEventKind::Closed,
