@@ -1,0 +1,25 @@
+[target.x86_64-unknown-linux-gnu]
+# Embed RPATH so the binary finds libcef.so next to itself ($ORIGIN)
+# or in a lib/ subdirectory — enabling portable, self-contained distribution
+# without needing LD_LIBRARY_PATH set by the user.
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN:$ORIGIN/lib"]
+
+[target.aarch64-unknown-linux-gnu]
+# Same RPATH embedding as linux-x64 for portable ARM64 distribution.
+# --allow-shlib-undefined: libcef.so's own dependencies (GTK, NSS, ALSA, etc.)
+# are runtime shared libraries present on the target system. The cross-compilation
+# linker can't resolve them against the host sysroot, but that's fine — they'll
+# be found at runtime on any standard aarch64 Linux install.
+rustflags = [
+    "-C", "link-arg=-Wl,-rpath,$ORIGIN:$ORIGIN/lib",
+    "-C", "link-arg=-Wl,--allow-shlib-undefined",
+]
+
+[env]
+# Point cef-dll-sys at a stable workspace-local directory for CEF downloads.
+# With this set, cef-dll-sys downloads to third_party/cef/<version>/cef_linux_x86_64/
+# instead of the ephemeral cargo OUT_DIR, so we can reuse the same assets at
+# runtime without a second download.
+# relative = true resolves from the .cargo/ directory, so "../third_party/cef"
+# points to <workspace>/third_party/cef.
+CEF_PATH = { value = "../third_party/cef", relative = true }
