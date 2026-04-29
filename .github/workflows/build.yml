@@ -142,11 +142,6 @@ jobs:
 
       - name: Build (cross)
         if: matrix.use_cross
-        env:
-          # Set CEF_PATH explicitly so cross can remap the workspace path to
-          # /project/ inside the Docker container (cross auto-remaps paths that
-          # contain $GITHUB_WORKSPACE). Cross.toml passes this var through.
-          CEF_PATH: ${{ github.workspace }}/third_party/cef
         run: cross build --release --target ${{ matrix.target }} -p webox-browser-app
 
       # ── Stage artifact ──────────────────────────────────────────────────────

@@ -14,11 +14,3 @@ rustflags = [
     "-C", "link-arg=-Wl,-rpath,$ORIGIN:$ORIGIN/lib",
     "-C", "link-arg=-Wl,--allow-shlib-undefined",
 ]
-
-[env]
-# Point cef-dll-sys at a stable workspace-local directory for CEF downloads.
-# relative = true resolves from the .cargo/ directory, so "../third_party/cef"
-# resolves to <workspace>/third_party/cef on native builds.
-# For cross (Docker), CEF_PATH is set explicitly in build.yml and passed
-# through via Cross.toml — cross remaps $GITHUB_WORKSPACE paths to /project/.
-CEF_PATH = { value = "../third_party/cef", relative = true }
