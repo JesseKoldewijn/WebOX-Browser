@@ -3,7 +3,7 @@ use std::path::Path;
 
 use cef::args::Args;
 use cef::rc::Rc;
-use cef::{self, wrap_app, App, ImplApp, LogItems, LogSeverity, Settings, WrapApp};
+use cef::{self, App, ImplApp, LogItems, LogSeverity, Settings, WrapApp, wrap_app};
 use webox_config::{AppConfig, BrowserRuntimeMode};
 
 wrap_app! {
@@ -787,15 +787,21 @@ mod tests {
         assert!(state.surface.focused);
 
         let events = engine.drain_events();
-        assert!(events
-            .iter()
-            .any(|event| event.kind == BrowserInstanceEventKind::Created));
-        assert!(events
-            .iter()
-            .any(|event| event.kind == BrowserInstanceEventKind::LoadFinished));
-        assert!(events
-            .iter()
-            .any(|event| event.kind == BrowserInstanceEventKind::SurfaceUpdated));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == BrowserInstanceEventKind::Created)
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == BrowserInstanceEventKind::LoadFinished)
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == BrowserInstanceEventKind::SurfaceUpdated)
+        );
 
         engine.close_browser_instance(&instance.id).unwrap();
         assert!(engine.browser_instance(&instance.id).is_none());

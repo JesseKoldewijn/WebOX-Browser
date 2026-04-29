@@ -13,8 +13,7 @@
 //!      them without any LD_LIBRARY_PATH / DYLD_LIBRARY_PATH magic.
 
 use std::{
-    env,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
 };
 
@@ -101,7 +100,7 @@ fn main() -> anyhow::Result<()> {
     // ── 1. Resolve workspace root ────────────────────────────────────────────
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let workspace_root = manifest_dir
-        .parent()   // apps/
+        .parent() // apps/
         .and_then(|p| p.parent()) // workspace root
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| manifest_dir.clone());
@@ -125,10 +124,7 @@ fn main() -> anyhow::Result<()> {
             platform.target,
         )?;
     } else {
-        println!(
-            "cargo::warning=CEF found at {}",
-            cef_extracted.display()
-        );
+        println!("cargo::warning=CEF found at {}", cef_extracted.display());
     }
 
     // ── 3. Stage into flat <slug>/ layout expected by crates/engine ─────────
@@ -172,25 +168,23 @@ fn stage_runtime_files(src: &Path, dst: &Path) -> anyhow::Result<()> {
     fs::create_dir_all(dst)?;
     // CEF Linux/Windows flat layout: .pak files live alongside the library.
     // macOS uses a .app bundle layout, but the Release/ dir is already flat.
-    if dst.join("locales").to_str().map_or(false, |_| src.join("locales").exists()) {
+    if dst
+        .join("locales")
+        .to_str()
+        .map_or(false, |_| src.join("locales").exists())
+    {
         fs::create_dir_all(dst.join("locales"))?;
     }
 
     copy_dir_contents(src, dst)?;
-    println!(
-        "cargo::warning=CEF staged at {}",
-        dst.display()
-    );
+    println!("cargo::warning=CEF staged at {}", dst.display());
     Ok(())
 }
 
 /// Copy runtime files from the CEF distribution next to the compiled binary.
 fn copy_to_bin_dir(src: &Path, bin_dir: &Path) -> anyhow::Result<()> {
     copy_dir_contents(src, bin_dir)?;
-    println!(
-        "cargo::warning=CEF runtime copied to {}",
-        bin_dir.display()
-    );
+    println!("cargo::warning=CEF runtime copied to {}", bin_dir.display());
     Ok(())
 }
 

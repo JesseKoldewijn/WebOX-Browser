@@ -56,8 +56,7 @@ const WORKLOADS: [WorkloadCase; 5] = [
         renderer_bytes: 3 * GIB,
         browser_bytes: 768 * MIB,
         gpu_bytes: GIB,
-        compatibility:
-            "renders canvas and GPU-oriented content representative of Unity WebGL scenes",
+        compatibility: "renders canvas and GPU-oriented content representative of Unity WebGL scenes",
         expected_outcome: WorkloadExpectation::Success,
     },
     WorkloadCase {
@@ -320,7 +319,7 @@ fn append_workload_result(
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_outcome, RuntimeOutcome, WorkloadCase, WorkloadExpectation};
+    use super::{RuntimeOutcome, WorkloadCase, WorkloadExpectation, classify_outcome};
 
     #[test]
     fn constrained_systems_are_classified_explicitly() {
