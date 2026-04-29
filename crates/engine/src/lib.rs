@@ -622,9 +622,10 @@ fn detect_runtime_environment() -> RuntimeEnvironment {
         // WSL sets "microsoft" (case-insensitive) in /proc/version.
         // This is the canonical detection method used by most tooling.
         if let Ok(version) = std::fs::read_to_string("/proc/version")
-            && version.to_ascii_lowercase().contains("microsoft") {
-                return RuntimeEnvironment::Wsl;
-            }
+            && version.to_ascii_lowercase().contains("microsoft")
+        {
+            return RuntimeEnvironment::Wsl;
+        }
         RuntimeEnvironment::Linux
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -1016,10 +1017,11 @@ impl WeboxEngine {
     ) -> Result<(), EngineError> {
         let is_live = self.live_browser_instances.contains_key(browser_id);
         if let Some(live) = self.live_browser_instances.get(browser_id)
-            && let Some(frame) = live.browser.main_frame() {
-                let cef_url = CefString::from(url);
-                frame.load_url(Some(&cef_url));
-            }
+            && let Some(frame) = live.browser.main_frame()
+        {
+            let cef_url = CefString::from(url);
+            frame.load_url(Some(&cef_url));
+        }
         let backend = {
             let instance = self.browser_instance_mut(browser_id)?;
             instance.url = url.to_string();
@@ -1093,72 +1095,70 @@ impl WeboxEngine {
             }
             other => {
                 if let Some(live) = self.live_browser_instances.get(browser_id)
-                    && let Some(host) = live.browser.host() {
-                        match other {
-                            HostSurfaceInputEvent::PointerMove { x, y } => {
-                                host.send_mouse_move_event(
-                                    Some(&MouseEvent { x, y, modifiers: 0 }),
-                                    0,
-                                );
-                            }
-                            HostSurfaceInputEvent::PointerButton {
-                                x,
-                                y,
-                                button,
-                                pressed,
+                    && let Some(host) = live.browser.host()
+                {
+                    match other {
+                        HostSurfaceInputEvent::PointerMove { x, y } => {
+                            host.send_mouse_move_event(Some(&MouseEvent { x, y, modifiers: 0 }), 0);
+                        }
+                        HostSurfaceInputEvent::PointerButton {
+                            x,
+                            y,
+                            button,
+                            pressed,
+                            click_count,
+                        } => {
+                            host.send_mouse_click_event(
+                                Some(&MouseEvent { x, y, modifiers: 0 }),
+                                match button {
+                                    HostMouseButton::Left => MouseButtonType::LEFT,
+                                    HostMouseButton::Middle => MouseButtonType::MIDDLE,
+                                    HostMouseButton::Right => MouseButtonType::RIGHT,
+                                },
+                                (!pressed) as i32,
                                 click_count,
-                            } => {
-                                host.send_mouse_click_event(
-                                    Some(&MouseEvent { x, y, modifiers: 0 }),
-                                    match button {
-                                        HostMouseButton::Left => MouseButtonType::LEFT,
-                                        HostMouseButton::Middle => MouseButtonType::MIDDLE,
-                                        HostMouseButton::Right => MouseButtonType::RIGHT,
-                                    },
-                                    (!pressed) as i32,
-                                    click_count,
-                                );
-                            }
-                            HostSurfaceInputEvent::Wheel {
-                                x,
-                                y,
+                            );
+                        }
+                        HostSurfaceInputEvent::Wheel {
+                            x,
+                            y,
+                            delta_x,
+                            delta_y,
+                        } => {
+                            host.send_mouse_wheel_event(
+                                Some(&MouseEvent { x, y, modifiers: 0 }),
                                 delta_x,
                                 delta_y,
-                            } => {
-                                host.send_mouse_wheel_event(
-                                    Some(&MouseEvent { x, y, modifiers: 0 }),
-                                    delta_x,
-                                    delta_y,
-                                );
-                            }
-                            HostSurfaceInputEvent::Key { key_code, pressed } => {
+                            );
+                        }
+                        HostSurfaceInputEvent::Key { key_code, pressed } => {
+                            host.send_key_event(Some(&KeyEvent {
+                                type_: if pressed {
+                                    KeyEventType::KEYDOWN
+                                } else {
+                                    KeyEventType::KEYUP
+                                },
+                                windows_key_code: key_code,
+                                native_key_code: key_code,
+                                ..KeyEvent::default()
+                            }));
+                        }
+                        HostSurfaceInputEvent::Text { text } => {
+                            for character in text.encode_utf16() {
                                 host.send_key_event(Some(&KeyEvent {
-                                    type_: if pressed {
-                                        KeyEventType::KEYDOWN
-                                    } else {
-                                        KeyEventType::KEYUP
-                                    },
-                                    windows_key_code: key_code,
-                                    native_key_code: key_code,
+                                    type_: KeyEventType::CHAR,
+                                    character,
+                                    unmodified_character: character,
+                                    windows_key_code: i32::from(character),
+                                    native_key_code: i32::from(character),
                                     ..KeyEvent::default()
                                 }));
                             }
-                            HostSurfaceInputEvent::Text { text } => {
-                                for character in text.encode_utf16() {
-                                    host.send_key_event(Some(&KeyEvent {
-                                        type_: KeyEventType::CHAR,
-                                        character,
-                                        unmodified_character: character,
-                                        windows_key_code: i32::from(character),
-                                        native_key_code: i32::from(character),
-                                        ..KeyEvent::default()
-                                    }));
-                                }
-                            }
-                            HostSurfaceInputEvent::Focus { .. }
-                            | HostSurfaceInputEvent::Resize { .. } => {}
                         }
+                        HostSurfaceInputEvent::Focus { .. }
+                        | HostSurfaceInputEvent::Resize { .. } => {}
                     }
+                }
                 if let Ok(instance) = self.browser_instance_mut(browser_id) {
                     instance.status_text = format!("Forwarded host surface input: {:?}", event);
                 }
@@ -1252,9 +1252,10 @@ impl WeboxEngine {
         message: &str,
     ) -> Result<(), EngineError> {
         if let Some(live) = self.live_browser_instances.get(browser_id)
-            && let Some(host) = live.browser.host() {
-                host.was_resized();
-            }
+            && let Some(host) = live.browser.host()
+        {
+            host.was_resized();
+        }
         let instance = self.browser_instance_mut(browser_id)?;
         instance.is_loading = false;
         instance.failure_state = Some(message.to_string());
@@ -1436,9 +1437,10 @@ impl WeboxEngine {
         focused: bool,
     ) -> Result<(), EngineError> {
         if let Some(live) = self.live_browser_instances.get(browser_id)
-            && let Some(host) = live.browser.host() {
-                host.set_focus(focused as i32);
-            }
+            && let Some(host) = live.browser.host()
+        {
+            host.set_focus(focused as i32);
+        }
         let instance = self.browser_instance_mut(browser_id)?;
         instance.surface.focused = focused;
         instance.status_text = if focused {
@@ -1469,9 +1471,10 @@ impl WeboxEngine {
             ),
         });
         if let Some(live) = self.live_browser_instances.remove(browser_id)
-            && let Some(host) = live.browser.host() {
-                host.close_browser(1);
-            }
+            && let Some(host) = live.browser.host()
+        {
+            host.close_browser(1);
+        }
         self.pending_events.push(BrowserInstanceEvent {
             browser_id: browser_id.to_string(),
             kind: BrowserInstanceEventKind::Closed,
