@@ -91,6 +91,17 @@ jobs:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
+      - name: Debug release-plz outputs
+        if: always()
+        run: |
+          echo "== release-plz step outputs =="
+          echo "releases_created: '${{ steps.release-plz.outputs.releases_created }}'"
+          echo "prs_created:      '${{ steps.release-plz.outputs.prs_created }}'"
+          echo "tag:              '${{ steps.release-plz.outputs.tag }}'"
+          echo "pr_number:        '${{ steps.release-plz.outputs.pr_number }}'"
+          echo "== all outputs (json) =="
+          echo '${{ toJSON(steps.release-plz.outputs) }}'
+
       - name: Run release-plz (dry run)
         if: needs.setup.outputs.is_dry_run == 'true'
         uses: release-plz/action@v0.5
