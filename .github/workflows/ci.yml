@@ -3,8 +3,28 @@ name: CI
 on:
   push:
     branches: ["**"]
+    paths:
+      - 'apps/browser/**'
+      - 'crates/**'
+      - 'tools/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'Cross.toml'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/ci.yml'
   pull_request:
     branches: ["**"]
+    paths:
+      - 'apps/browser/**'
+      - 'crates/**'
+      - 'tools/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'Cross.toml'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/ci.yml'
   workflow_dispatch:
 
 # Cancel in-progress runs on the same branch to save minutes

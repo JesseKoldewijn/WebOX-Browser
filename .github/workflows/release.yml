@@ -3,6 +3,18 @@ name: Release
 on:
   push:
     branches: [main]
+    paths:
+      - 'apps/browser/**'
+      - 'crates/**'
+      - 'tools/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'Cross.toml'
+      - 'rust-toolchain.toml'
+      - 'release-plz.toml'
+      - 'cliff.toml'
+      - '.github/workflows/release.yml'
   workflow_dispatch:
     inputs:
       dry_run:
