@@ -25,7 +25,7 @@ body = """
 {% for commit in commits %}
 - {% if commit.breaking %}**BREAKING** {% endif %}\
   {{ commit.message | upper_first }} \
-  ([`{{ commit.id | truncate(length=7, end="") }}`]({{ commit.remote.link }}))\
+  ([`{{ commit.id | truncate(length=7, end="") }}`](https://github.com/JesseKoldewijn/WebOX-Browser/commit/{{ commit.id }}))\
   {% if commit.body %}\n\n  {{ commit.body | indent(width=2, first=false) }}{% endif %}
 {% endfor %}
 {% endfor %}\n
@@ -50,7 +50,7 @@ split_commits = false
 # Regex to filter out commits by their message.
 commit_preprocessors = [
   # Strip issue references like (#123) from the end of messages.
-  { pattern = '\((\w+\s)?#([0-9]+)\)', replace = "([#${2}]({{ remote.link }}/issues/${2}))"},
+  { pattern = '\((\w+\s)?#([0-9]+)\)', replace = "([#${2}](https://github.com/JesseKoldewijn/WebOX-Browser/issues/${2}))"},
 ]
 
 # Map conventional commit types to changelog section headings.
