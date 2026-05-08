@@ -27,3 +27,15 @@ changelog_update = true
 
 # Commit message used for the version-bump commit inside the release PR.
 git_release_body = "## What's Changed\n\n{{ changelog }}"
+
+# build.rs downloads CEF binaries into third_party/cef/ at build time.
+# That directory is gitignored but release-plz sees the downloaded files
+# as uncommitted changes and refuses to proceed. allow_dirty lets it
+# continue despite the untracked third_party/ contents.
+allow_dirty = true
+
+# None of our crates expose a stable public library API, so semver
+# breaking-change detection via cargo-semver-checks is not meaningful
+# here. Disabling it also avoids the cargo check pass that triggers
+# build.rs and causes the third_party/cef/ dirty-tree problem.
+semver_check = false
