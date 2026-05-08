@@ -453,7 +453,9 @@ pub enum BrowserSurfaceRenderMode {
 pub struct BrowserFrameBuffer {
     pub width: u32,
     pub height: u32,
-    pub bgra: Vec<u8>,
+    /// Shared reference to raw BGRA bytes from CEF. Cloning this is O(1) —
+    /// no pixel data is copied; the underlying allocation is reference-counted.
+    pub bgra: Arc<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1725,7 +1727,7 @@ impl WeboxEngine {
                     instance.surface.frame_buffer = buffer.map(|bgra| BrowserFrameBuffer {
                         width: width.max(0) as u32,
                         height: height.max(0) as u32,
-                        bgra,
+                        bgra: Arc::new(bgra),
                     });
                 }
                 self.push_event(

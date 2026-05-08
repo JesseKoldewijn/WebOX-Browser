@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 pub type WindowId = String;
 pub type TabId = String;
 
@@ -19,7 +21,9 @@ pub struct SurfaceViewState {
 pub struct SurfaceFrameBuffer {
     pub width: u32,
     pub height: u32,
-    pub bgra: Vec<u8>,
+    /// Shared reference to raw BGRA bytes from CEF. Cloning this is O(1) —
+    /// no pixel data is copied; the underlying allocation is reference-counted.
+    pub bgra: Arc<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -207,7 +211,9 @@ impl BrowserWindowModel {
 
 #[cfg(test)]
 mod tests {
-    use super::{BrowserWindowModel, SurfaceViewState, TabViewState};
+    use std::sync::Arc;
+
+    use super::{BrowserWindowModel, SurfaceFrameBuffer, SurfaceViewState, TabViewState};
 
     fn updated_tab(id: &str) -> TabViewState {
         TabViewState {
@@ -271,5 +277,19 @@ mod tests {
         window.close_tab(&second_tab);
 
         assert_eq!(window.active_tab_id.as_deref(), Some("tab-3"));
+    }
+
+    #[test]
+    fn surface_frame_buffer_clone_shares_underlying_bytes() {
+        let bytes = Arc::new(vec![0u8, 128, 255, 255]);
+        let buf = SurfaceFrameBuffer {
+            width: 1,
+            height: 1,
+            bgra: Arc::clone(&bytes),
+        };
+        let cloned = buf.clone();
+        // Arc::ptr_eq confirms no allocation occurred — same backing Vec.
+        assert!(Arc::ptr_eq(&buf.bgra, &cloned.bgra));
+        assert_eq!(*cloned.bgra, vec![0u8, 128, 255, 255]);
     }
 }

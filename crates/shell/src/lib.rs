@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use webox_config::AppConfig;
 use webox_engine::{
@@ -49,9 +50,13 @@ impl HostShell {
     /// Drive the CEF message loop for one iteration.
     /// Call this on every UI frame to keep CEF processing network, rendering,
     /// and IPC messages.
-    pub fn tick(&mut self) {
+    ///
+    /// Returns `true` if at least one [`BrowserInstanceEventKind::SurfaceUpdated`] event
+    /// was processed, indicating new pixel data is available and the UI should
+    /// repaint immediately rather than waiting for the next scheduled tick.
+    pub fn tick(&mut self) -> bool {
         self.engine.tick();
-        self.sync_engine_events();
+        self.sync_engine_events()
     }
 
     pub fn shutdown(&mut self) {
@@ -290,11 +295,19 @@ impl HostShell {
         }
     }
 
-    pub fn sync_engine_events(&mut self) {
+    /// Process all pending engine events and apply them to window state.
+    ///
+    /// Returns `true` if any [`BrowserInstanceEventKind::SurfaceUpdated`] event
+    /// was processed during this call.
+    pub fn sync_engine_events(&mut self) -> bool {
         let events = self.engine.drain_events();
+        let had_surface_update = events
+            .iter()
+            .any(|e| e.kind == BrowserInstanceEventKind::SurfaceUpdated);
         for event in events {
             self.apply_engine_event(event);
         }
+        had_surface_update
     }
 
     #[must_use]
@@ -374,7 +387,7 @@ impl HostShell {
                     SurfaceFrameBuffer {
                         width: buffer.width,
                         height: buffer.height,
-                        bgra: buffer.bgra.clone(),
+                        bgra: Arc::clone(&buffer.bgra),
                     }
                 }),
                 damage_events: snapshot.surface.damage_events,
@@ -577,5 +590,16 @@ mod tests {
                 .as_deref()
                 .is_some_and(|attribution| attribution.contains("live_mvp_evidence=true"))
         );
+    }
+
+    #[test]
+    fn tick_returns_false_when_no_surface_update_occurs() {
+        let mut shell = HostShell::new(AppConfig::simulated());
+        shell.start();
+        let window = shell.create_window("window-1");
+        let _tab = shell.open_tab(&window, "https://webox.dev").unwrap();
+        // In simulated mode no real CEF paint happens; tick must report no update.
+        let had_update = shell.tick();
+        assert!(!had_update, "simulated engine must not emit SurfaceUpdated on tick");
     }
 }
