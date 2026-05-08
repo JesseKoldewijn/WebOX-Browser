@@ -62,7 +62,7 @@ jobs:
       pull-requests: write
     outputs:
       releases_created: ${{ steps.release-plz.outputs.releases_created }}
-      tag: ${{ steps.release-plz.outputs.tag }}
+      tag: ${{ steps.version.outputs.tag }}
       # Strip leading 'v' for use in archive filenames
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -85,8 +85,8 @@ jobs:
         id: release-plz
         if: needs.setup.outputs.is_dry_run != 'true'
         uses: release-plz/action@v0.5
-        with:
-          command: release-plz
+        # Omit `command` so the action runs both release-pr and release
+        # (passing `command: release-plz` is invalid and causes both blocks to be skipped)
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -97,8 +97,8 @@ jobs:
           echo "== release-plz step outputs =="
           echo "releases_created: '${{ steps.release-plz.outputs.releases_created }}'"
           echo "prs_created:      '${{ steps.release-plz.outputs.prs_created }}'"
-          echo "tag:              '${{ steps.release-plz.outputs.tag }}'"
-          echo "pr_number:        '${{ steps.release-plz.outputs.pr_number }}'"
+          echo "pr:               '${{ steps.release-plz.outputs.pr }}'"
+          echo "releases (json):  '${{ steps.release-plz.outputs.releases }}'"
           echo "== all outputs (json) =="
           echo '${{ toJSON(steps.release-plz.outputs) }}'
 
@@ -107,14 +107,21 @@ jobs:
         uses: release-plz/action@v0.5
         with:
           command: release-pr
-          args: --dry-run
+          dry_run: true
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
-      - name: Extract version from tag
+      - name: Extract version from releases JSON
         id: version
         run: |
-          TAG="${{ steps.release-plz.outputs.tag }}"
+          # releases output is a JSON array; grab the tag of the first release
+          RELEASES='${{ steps.release-plz.outputs.releases }}'
+          if [[ -n "$RELEASES" && "$RELEASES" != "null" && "$RELEASES" != "[]" ]]; then
+            TAG=$(echo "$RELEASES" | jq -r '.[0].tag // ""')
+          else
+            TAG=""
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
   # ── Build release artifacts (reuses build.yml matrix, no duplication) ─────────
