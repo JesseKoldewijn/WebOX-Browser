@@ -12,6 +12,11 @@ changelog_config = "cliff.toml"
 # Set to true if you want to publish library crates to crates.io.
 publish = false
 
+# git_release_enable must be set explicitly because release-plz defaults it
+# to the same value as `publish`. With publish = false it would otherwise
+# silently skip creating GitHub Releases entirely.
+git_release_enable = true
+
 # Commit message used for the version-bump commit inside the release PR.
 # Follows the skip-ci convention so CI doesn't re-run on the bump commit.
 git_release_body = "## What's Changed\n\n{{ changelog }}"
@@ -25,3 +30,6 @@ changelog_update = true
 # The primary published artifact is the browser app binary.
 # Library crates (engine, shell, config, …) are not published to crates.io.
 publish = false
+
+# Mirror the workspace-level override so per-package defaults also produce releases.
+git_release_enable = true
