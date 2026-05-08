@@ -7,13 +7,15 @@ on:
       - 'apps/browser/**'
       - 'crates/**'
       - 'tools/**'
-      - 'Cargo.toml'
+      - '**/Cargo.toml'
       - 'Cargo.lock'
+      - '**/build.rs'
       - '.cargo/**'
       - 'Cross.toml'
       - 'rust-toolchain.toml'
       - 'release-plz.toml'
       - 'cliff.toml'
+      - 'packaging/**'
       - '.github/workflows/release.yml'
   workflow_dispatch:
     inputs:

@@ -1,0 +1,14 @@
+Package: webox-browser
+Version: VERSION
+Architecture: ARCH
+Maintainer: Jesse Koldewijn <jesse@koldewijn.net>
+Installed-Size: INSTALLED_SIZE
+Depends: libgtk-3-0 (>= 3.22), libxcb1, libxcb-render0, libxcb-shape0, libxcb-xfixes0, libxkbcommon0, libssl3, libnss3, libatk1.0-0, libgbm1, libdrm2, libx11-6, libxcomposite1, libxdamage1, libxext6, libxfixes3, libxrandr2
+Section: web
+Priority: optional
+Homepage: https://github.com/JesseKoldewijn/WebOX-Browser
+Description: WebOX Browser
+ A web browser built with Rust, egui, and Chromium Embedded Framework.
+ .
+ WebOX Browser provides a modern, lightweight web browsing experience
+ using CEF for web content rendering and egui for the native UI shell.

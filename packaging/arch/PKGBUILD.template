@@ -1,0 +1,68 @@
+# Maintainer: Jesse Koldewijn <jesse@koldewijn.net>
+# shellcheck disable=SC2034,SC2154
+#
+# This file is generated from packaging/arch/PKGBUILD.template at release time.
+# Do not edit manually — changes will be overwritten on the next release.
+#
+# To install locally:
+#   git clone https://aur.archlinux.org/webox-browser.git
+#   cd webox-browser
+#   makepkg -si
+#
+# Or with an AUR helper:
+#   paru -S webox-browser
+
+pkgname=webox-browser
+pkgver=VERSION
+pkgrel=1
+pkgdesc="A web browser built with Rust, egui, and Chromium Embedded Framework"
+arch=('x86_64')
+url="https://github.com/JesseKoldewijn/WebOX-Browser"
+license=('MIT')
+depends=(
+    'gtk3'
+    'libxcb'
+    'libxkbcommon'
+    'openssl'
+    'nss'
+    'atk'
+    'libdrm'
+    'mesa'
+)
+options=('!strip')  # CEF binaries must not be stripped
+
+source=(
+    "webox-browser-${pkgver}-linux-x64.tar.gz::https://github.com/JesseKoldewijn/WebOX-Browser/releases/download/webox-browser-app-v${pkgver}/webox-browser-${pkgver}-linux-x64.tar.gz"
+    "webox-browser.desktop::https://raw.githubusercontent.com/JesseKoldewijn/WebOX-Browser/main/packaging/appimage/webox-browser.desktop"
+)
+sha256sums=(
+    'SHA256_TARBALL'
+    'SKIP'
+)
+
+package() {
+    # Install binary and CEF runtime into /usr/lib/webox-browser/
+    install -dm755 "${pkgdir}/usr/lib/webox-browser"
+    cp -r "${srcdir}/." "${pkgdir}/usr/lib/webox-browser/"
+
+    # Remove the desktop file we copied to srcdir (it's handled separately)
+    rm -f "${pkgdir}/usr/lib/webox-browser/webox-browser.desktop"
+
+    # Make binary executable and create a wrapper symlink in /usr/bin/
+    chmod 755 "${pkgdir}/usr/lib/webox-browser/webox-browser-app"
+    install -dm755 "${pkgdir}/usr/bin"
+    ln -sf /usr/lib/webox-browser/webox-browser-app \
+           "${pkgdir}/usr/bin/webox-browser"
+
+    # Desktop entry
+    install -Dm644 "${srcdir}/webox-browser.desktop" \
+                   "${pkgdir}/usr/share/applications/webox-browser.desktop"
+
+    # License
+    install -dm755 "${pkgdir}/usr/share/licenses/${pkgname}"
+    # CEF bundles CREDITS.html; symlink it as a license file
+    if [ -f "${pkgdir}/usr/lib/webox-browser/CREDITS.html" ]; then
+        ln -sf /usr/lib/webox-browser/CREDITS.html \
+               "${pkgdir}/usr/share/licenses/${pkgname}/CREDITS.html"
+    fi
+}

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=WebOX Browser
+GenericName=Web Browser
+Comment=A web browser built with Rust and Chromium Embedded Framework
+Exec=webox-browser-app %u
+Icon=webox-browser
+Terminal=false
+Type=Application
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;application/xml;application/rss+xml;application/rdf+xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true
+StartupWMClass=webox-browser-app
