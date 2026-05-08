@@ -1,6 +1,32 @@
 # webox
 
+[![CI](https://github.com/JesseKoldewijn/WebOX-Browser/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/JesseKoldewijn/WebOX-Browser/actions/workflows/ci.yml)
+[![Build](https://github.com/JesseKoldewijn/WebOX-Browser/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/JesseKoldewijn/WebOX-Browser/actions/workflows/build.yml)
+
 webox is a monorepo for a high-memory browser initiative that targets Chromium-class compatibility with a higher per-tab memory ceiling.
+
+## Supported Platforms
+
+| Platform | Architecture | Build |
+|---|---|---|
+| Linux | x86\_64 | native |
+| Linux | aarch64 | cross-compiled |
+| macOS | Apple Silicon (arm64) | native |
+| Windows | x86\_64 | native |
+
+## Installation
+
+Pre-built binaries are attached to each [GitHub Release](https://github.com/JesseKoldewijn/WebOX-Browser/releases).
+
+**Linux / macOS**
+```sh
+curl -fsSL https://raw.githubusercontent.com/JesseKoldewijn/WebOX-Browser/main/scripts/install.sh | sh
+```
+
+**Windows (PowerShell)**
+```powershell
+irm https://raw.githubusercontent.com/JesseKoldewijn/WebOX-Browser/main/scripts/install.ps1 | iex
+```
 
 ## Workspace Layout
 
@@ -28,3 +54,11 @@ webox is a monorepo for a high-memory browser initiative that targets Chromium-c
 - Put app-level browser startup in `apps/browser`.
 - Put reusable brand, schema, and content contracts in `packages/*`.
 - Put public-facing product and developer content in the Astro site at `apps/docs` and long-form project references in `docs/`.
+
+## Contributing
+
+Contributions are welcome. Please open an issue or pull request against `main`. Commits should follow the [Conventional Commits](https://www.conventionalcommits.org/) spec — this drives automatic changelog generation and semver bumps via `release-plz`.
+
+## License
+
+See [LICENSE](./LICENSE) if present, or check the repository root.
