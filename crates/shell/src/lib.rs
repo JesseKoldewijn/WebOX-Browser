@@ -600,6 +600,9 @@ mod tests {
         let _tab = shell.open_tab(&window, "https://webox.dev").unwrap();
         // In simulated mode no real CEF paint happens; tick must report no update.
         let had_update = shell.tick();
-        assert!(!had_update, "simulated engine must not emit SurfaceUpdated on tick");
+        assert!(
+            !had_update,
+            "simulated engine must not emit SurfaceUpdated on tick"
+        );
     }
 }

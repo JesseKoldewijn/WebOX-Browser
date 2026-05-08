@@ -400,15 +400,18 @@ mod tests {
         collector.collect_for_tab("tab-1");
 
         // Artificially age the cache past the TTL.
-        collector.last_collected =
-            Some(std::time::Instant::now() - MEMORY_CACHE_TTL - std::time::Duration::from_millis(1));
+        collector.last_collected = Some(
+            std::time::Instant::now() - MEMORY_CACHE_TTL - std::time::Duration::from_millis(1),
+        );
 
         // A stale cache should trigger a fresh /proc scan; result is still valid.
         let fresh = collector.collect_for_tab("tab-1");
         assert!(!fresh.processes.is_empty());
         // Cache timestamp must have been refreshed.
-        assert!(collector
-            .last_collected
-            .is_some_and(|t| t.elapsed() < MEMORY_CACHE_TTL));
+        assert!(
+            collector
+                .last_collected
+                .is_some_and(|t| t.elapsed() < MEMORY_CACHE_TTL)
+        );
     }
 }
