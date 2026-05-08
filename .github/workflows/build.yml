@@ -3,8 +3,28 @@ name: Build
 on:
   push:
     branches: [main]
+    paths:
+      - 'apps/browser/**'
+      - 'crates/**'
+      - 'tools/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'Cross.toml'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/build.yml'
   pull_request:
     branches: [main]
+    paths:
+      - 'apps/browser/**'
+      - 'crates/**'
+      - 'tools/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'Cross.toml'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
   # Also callable from release.yml to produce release artifacts
   workflow_call:
