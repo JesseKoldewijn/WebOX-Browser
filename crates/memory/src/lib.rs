@@ -1,4 +1,5 @@
 use std::fs;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MemoryThresholds {
@@ -228,22 +229,44 @@ impl MemoryController {
     }
 }
 
-pub struct LinuxProcessMemoryCollector;
+/// Minimum time between full `/proc` scans. The result is reused for
+/// callers that arrive within this window.
+const MEMORY_CACHE_TTL: Duration = Duration::from_secs(2);
+
+pub struct LinuxProcessMemoryCollector {
+    /// Cached result from the most recent `/proc` scan.
+    cached: Option<ObservedMemoryTelemetry>,
+    /// When the cached result was last populated.
+    last_collected: Option<Instant>,
+}
 
 impl LinuxProcessMemoryCollector {
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self {
+            cached: None,
+            last_collected: None,
+        }
     }
 
-    pub fn collect_for_tab(&self, tab_id: &str) -> ObservedMemoryTelemetry {
+    pub fn collect_for_tab(&mut self, tab_id: &str) -> ObservedMemoryTelemetry {
+        // Return cached telemetry if it is still fresh. Replace the tab_id in
+        // the cached result since the caller may differ from the original scan.
+        if let (Some(cached), Some(last)) = (&self.cached, self.last_collected)
+            && last.elapsed() < MEMORY_CACHE_TTL
+        {
+            let mut fresh = cached.clone();
+            fresh.telemetry.tab_id = tab_id.to_string();
+            return fresh;
+        }
+
         let mut processes = self.browser_processes();
         if processes.is_empty() {
             processes.push(self.current_process_observation());
         }
 
         let total_rss = processes.iter().map(|process| process.rss_bytes).sum();
-        ObservedMemoryTelemetry {
+        let result = ObservedMemoryTelemetry {
             telemetry: TabTelemetry {
                 tab_id: tab_id.to_string(),
                 renderer_bytes: total_rss,
@@ -252,7 +275,11 @@ impl LinuxProcessMemoryCollector {
             },
             attribution: MemoryAttribution::aggregate_process(processes.len()),
             processes,
-        }
+        };
+
+        self.cached = Some(result.clone());
+        self.last_collected = Some(Instant::now());
+        result
     }
 
     fn browser_processes(&self) -> Vec<ProcessMemoryObservation> {
@@ -330,7 +357,7 @@ mod tests {
 
     #[test]
     fn linux_collector_observes_current_process_memory() {
-        let collector = LinuxProcessMemoryCollector::new();
+        let mut collector = LinuxProcessMemoryCollector::new();
         let observed = collector.collect_for_tab("tab-1");
 
         assert_eq!(observed.telemetry.tab_id, "tab-1");
@@ -350,5 +377,41 @@ mod tests {
         assert_eq!(observed.confidence, AttributionConfidence::Aggregate);
         assert!(observed.live_mvp_evidence);
         assert!(observed.label().contains("live_mvp_evidence=true"));
+    }
+
+    #[test]
+    fn linux_collector_returns_cached_result_within_ttl() {
+        let mut collector = LinuxProcessMemoryCollector::new();
+        let first = collector.collect_for_tab("tab-1");
+        // Second call within the 2 s TTL must return the same process list
+        // (only the tab_id field is overridden by the caller).
+        let second = collector.collect_for_tab("tab-2");
+
+        // Process observations are identical — no second /proc scan occurred.
+        assert_eq!(first.processes, second.processes);
+        // The returned tab_id reflects the caller's argument, not the cached one.
+        assert_eq!(second.telemetry.tab_id, "tab-2");
+    }
+
+    #[test]
+    fn linux_collector_cache_is_invalidated_after_ttl() {
+        use crate::MEMORY_CACHE_TTL;
+        let mut collector = LinuxProcessMemoryCollector::new();
+        collector.collect_for_tab("tab-1");
+
+        // Artificially age the cache past the TTL.
+        collector.last_collected = Some(
+            std::time::Instant::now() - MEMORY_CACHE_TTL - std::time::Duration::from_millis(1),
+        );
+
+        // A stale cache should trigger a fresh /proc scan; result is still valid.
+        let fresh = collector.collect_for_tab("tab-1");
+        assert!(!fresh.processes.is_empty());
+        // Cache timestamp must have been refreshed.
+        assert!(
+            collector
+                .last_collected
+                .is_some_and(|t| t.elapsed() < MEMORY_CACHE_TTL)
+        );
     }
 }

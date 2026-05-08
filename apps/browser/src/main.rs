@@ -17,6 +17,9 @@ struct BrowserApp {
     show_diagnostics: bool,
     surface_texture: Option<egui::TextureHandle>,
     surface_texture_token: u64,
+    /// Reusable scratch buffer for BGRA→RGBA channel-swap, sized to the
+    /// largest frame seen so far. Avoids a per-frame heap allocation.
+    frame_pixel_scratch: Vec<u8>,
 }
 
 impl BrowserApp {
@@ -72,6 +75,7 @@ impl BrowserApp {
             show_diagnostics: !live_mvp_ready,
             surface_texture: None,
             surface_texture_token: 0,
+            frame_pixel_scratch: Vec::new(),
         }
     }
 
@@ -514,15 +518,24 @@ impl BrowserApp {
             return None;
         }
         if self.surface_texture_token != surface.frame_token || self.surface_texture.is_none() {
-            let pixels = buffer
-                .bgra
-                .chunks_exact(4)
-                .map(|bgra| {
-                    egui::Color32::from_rgba_unmultiplied(bgra[2], bgra[1], bgra[0], bgra[3])
-                })
-                .collect::<Vec<_>>();
-            let image =
-                egui::ColorImage::new([buffer.width as usize, buffer.height as usize], pixels);
+            // Reuse the scratch buffer to avoid a per-frame Vec<Color32> allocation.
+            // resize keeps capacity if the frame is the same size as the last one.
+            let total_bytes = buffer.width as usize * buffer.height as usize * 4;
+            self.frame_pixel_scratch.resize(total_bytes, 0);
+            for (out, bgra) in self
+                .frame_pixel_scratch
+                .chunks_exact_mut(4)
+                .zip(buffer.bgra.chunks_exact(4))
+            {
+                out[0] = bgra[2]; // R
+                out[1] = bgra[1]; // G
+                out[2] = bgra[0]; // B
+                out[3] = bgra[3]; // A
+            }
+            let image = egui::ColorImage::from_rgba_unmultiplied(
+                [buffer.width as usize, buffer.height as usize],
+                &self.frame_pixel_scratch,
+            );
             if let Some(handle) = &mut self.surface_texture {
                 // Reuse the existing GPU texture slot — avoids allocating a new
                 // handle every frame which exhausts GPU context resources in WSL.
@@ -664,11 +677,17 @@ impl eframe::App for BrowserApp {
 
         // Drive the CEF message loop once per frame so CEF can process
         // network requests, IPC, JavaScript timers, and on_paint callbacks.
-        self.shell.tick();
+        let had_surface_update = self.shell.tick();
 
-        // Request continuous repaints so CEF message loop is driven every frame
-        // even when there is no user input.
-        ctx.request_repaint();
+        // If CEF delivered new pixels this frame, request an immediate repaint
+        // so the new frame appears without latency. Otherwise schedule a repaint
+        // at ~60 fps to keep the CEF tick running (JS timers, network, etc.)
+        // without spinning the GPU as fast as possible when there is no new content.
+        if had_surface_update {
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
 
         self.update_window_title();
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.window_title.clone()));
