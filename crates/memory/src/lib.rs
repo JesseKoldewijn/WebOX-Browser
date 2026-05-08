@@ -252,12 +252,12 @@ impl LinuxProcessMemoryCollector {
     pub fn collect_for_tab(&mut self, tab_id: &str) -> ObservedMemoryTelemetry {
         // Return cached telemetry if it is still fresh. Replace the tab_id in
         // the cached result since the caller may differ from the original scan.
-        if let (Some(cached), Some(last)) = (&self.cached, self.last_collected) {
-            if last.elapsed() < MEMORY_CACHE_TTL {
-                let mut fresh = cached.clone();
-                fresh.telemetry.tab_id = tab_id.to_string();
-                return fresh;
-            }
+        if let (Some(cached), Some(last)) = (&self.cached, self.last_collected)
+            && last.elapsed() < MEMORY_CACHE_TTL
+        {
+            let mut fresh = cached.clone();
+            fresh.telemetry.tab_id = tab_id.to_string();
+            return fresh;
         }
 
         let mut processes = self.browser_processes();
