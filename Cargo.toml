@@ -16,3 +16,11 @@ edition = "2024"
 license = "MIT"
 rust-version = "1.85"
 version = "0.1.0"
+
+[workspace.dependencies]
+webox-config      = { path = "crates/config",      version = "0.1.0" }
+webox-engine      = { path = "crates/engine",      version = "0.1.0" }
+webox-memory      = { path = "crates/memory",      version = "0.1.0" }
+webox-runtime-api = { path = "crates/runtime-api", version = "0.1.0" }
+webox-shell       = { path = "crates/shell",       version = "0.1.0" }
+webox-ui          = { path = "crates/ui",          version = "0.1.0" }

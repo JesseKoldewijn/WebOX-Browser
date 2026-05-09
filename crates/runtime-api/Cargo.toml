@@ -5,6 +5,6 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-webox-config = { path = "../config" }
-webox-engine = { path = "../engine" }
-webox-memory = { path = "../memory" }
+webox-config = { workspace = true }
+webox-engine = { workspace = true }
+webox-memory = { workspace = true }
