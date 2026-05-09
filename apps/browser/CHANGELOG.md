@@ -4,6 +4,36 @@ All notable changes to webox-browser are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-05-09
+
+### Bug Fixes
+
+- Skip CEF download during cargo package --verify in release-plz ([#13](https://github.com/JesseKoldewijn/WebOX-Browser/issues/13)) ([`503bf11`](https://github.com/JesseKoldewijn/WebOX-Browser/commit/503bf1125ff4c14d2318e960868c7562334c85c3))
+
+* fix: skip CEF download during cargo package --verify in release-plz
+
+    release-plz runs `cargo package --verify` internally which triggers
+    build.rs and downloads ~500MB of CEF binaries, causing the release job
+    to time out after ~34 minutes.
+
+    Add a SKIP_CEF_DOWNLOAD env var guard to apps/browser/build.rs that
+    returns early before any download or staging logic. CEF is loaded
+    dynamically at run time (no cargo:rustc-link directives anywhere), so
+    the package compiles and links cleanly without the runtime present.
+
+    Set SKIP_CEF_DOWNLOAD=1 in the release-plz step env so the guard
+    activates only during package verification, not during actual builds.
+
+    * fix: pass commit message via env var in setup step
+
+    Direct ${{ github.event.head_commit.message }} interpolation into a
+    bash script causes the shell to interpret backticks in the message as
+    command substitution. Pass it through an env: variable instead so the
+    value is treated as a plain string.
+
+
+
+
 ## [0.1.0] - 2026-05-08
 
 ### Bug Fixes
