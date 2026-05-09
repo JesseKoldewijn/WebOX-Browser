@@ -46,12 +46,15 @@ jobs:
     steps:
       - name: Check skip conditions
         id: skip
+        # Pass the commit message via env to avoid bash interpreting
+        # backticks / special chars injected by ${{ }} expression syntax.
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
-          MSG="${{ github.event.head_commit.message }}"
-          if [[ "$MSG" == chore\(release\):* ]]; then
+          if [[ "$COMMIT_MSG" == chore\(release\):* ]]; then
             echo "should_skip=true" >> $GITHUB_OUTPUT
             echo "Skipping: release commit"
-          elif [[ "$MSG" == *"[skip ci]"* ]]; then
+          elif [[ "$COMMIT_MSG" == *"[skip ci]"* ]]; then
             echo "should_skip=true" >> $GITHUB_OUTPUT
             echo "Skipping: [skip ci] in message"
           else
