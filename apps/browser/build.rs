@@ -94,6 +94,16 @@ fn main() -> anyhow::Result<()> {
     println!("cargo::rerun-if-changed=third_party/cef");
     println!("cargo::rerun-if-env-changed=CARGO_CFG_TARGET_OS");
     println!("cargo::rerun-if-env-changed=CARGO_CFG_TARGET_ARCH");
+    println!("cargo::rerun-if-env-changed=SKIP_CEF_DOWNLOAD");
+
+    // When running under `cargo package --verify` (e.g. release-plz), skip the
+    // multi-hundred-MB CEF download entirely.  The package verification step only
+    // needs the crate to *compile and link* — it does not need a working CEF
+    // runtime, because CEF is loaded dynamically at run time (no link-time dep).
+    if env::var("SKIP_CEF_DOWNLOAD").is_ok() {
+        println!("cargo::warning=SKIP_CEF_DOWNLOAD set — skipping CEF download/staging.");
+        return Ok(());
+    }
 
     let platform = detect_platform();
 

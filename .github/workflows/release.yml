@@ -43,9 +43,12 @@ jobs:
     steps:
       - name: Check skip conditions
         id: skip
+        # Pass the commit message via env to avoid bash interpreting
+        # backticks / special chars injected by ${{ }} expression syntax.
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
-          MSG="${{ github.event.head_commit.message }}"
-          if [[ "$MSG" == chore\(release\):* ]]; then
+          if [[ "$COMMIT_MSG" == chore\(release\):* ]]; then
             echo "should_skip=true" >> $GITHUB_OUTPUT
             echo "Skipping: release commit"
           else
@@ -104,6 +107,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          # Skip the multi-hundred-MB CEF download during `cargo package --verify`.
+          # CEF is loaded dynamically at run time so the package still compiles and
+          # links correctly; the download is only needed for a functional binary.
+          SKIP_CEF_DOWNLOAD: "1"
 
       - name: Debug release-plz outputs
         if: always()
