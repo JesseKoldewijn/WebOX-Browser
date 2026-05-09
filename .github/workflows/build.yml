@@ -487,9 +487,9 @@ jobs:
           $version = "${{ inputs.version }}"
           if (-not $version) { $version = "0.0.0" }
 
-          # ── Install WiX v5 (pin to avoid v7's OSMF EULA requirement) ────────
-          dotnet tool install --global wix --version 5.0.2
-          wix extension add WixToolset.UI.wixext/5.0.2 --global
+          # ── Install WiX v7 (pass -acceptEula wix7 on each command for CI) ──
+          dotnet tool install --global wix
+          wix extension add WixToolset.UI.wixext -acceptEula wix7 --global
 
           # ── Harvest staging\ into AppFiles.wxs ─────────────────────────────
           # WiX v4 wix harvest is used if available; otherwise we generate
@@ -567,6 +567,7 @@ jobs:
           wix build packaging/windows/webox-browser.wxs $appFilesWxs `
               -d "Version=$version" `
               -ext WixToolset.UI.wixext `
+              -acceptEula wix7 `
               -o $msiFile
 
           "MSI_FILE=$msiFile" | Out-File -FilePath $env:GITHUB_ENV -Append
