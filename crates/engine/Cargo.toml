@@ -6,4 +6,4 @@ version.workspace = true
 
 [dependencies]
 cef = { version = "147.1.0", default-features = false, features = ["linux-x11"] }
-webox-config = { path = "../config", version = "0.1.0" }
+webox-config = { path = "../config", version = "0.1.1" }
