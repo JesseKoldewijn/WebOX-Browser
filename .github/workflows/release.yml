@@ -95,10 +95,16 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
+      # git fetch does not overwrite locally-cached force-pushed tags by default.
+      # Release-plz reads tags via git2 from the local object db, so without this
+      # it would see stale tag→commit mappings and check out the wrong build.rs.
+      - name: Force-refresh tags
+        run: git fetch --tags --force
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # Cache crate downloads so `cargo package --verify` doesn't re-fetch deps.
+      # Cache crate downloads so cargo package does not re-fetch deps each run.
       - name: Cache Cargo registry
         uses: actions/cache@v4
         with:
@@ -110,18 +116,32 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-release-plz-registry-
 
-      # Cache compiled artifacts produced by `cargo package --verify`.
-      # release-plz checks out each tag commit into a temp worktree and runs
-      # cargo build there; pointing CARGO_TARGET_DIR at a fixed cached path
-      # means subsequent runs reuse the compiled objects instead of rebuilding.
-      - name: Cache release-plz build artifacts
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo-release-plz-target/
-          key: ${{ runner.os }}-release-plz-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
-          restore-keys: |
-            ${{ runner.os }}-release-plz-target-${{ hashFiles('**/Cargo.lock') }}-
-            ${{ runner.os }}-release-plz-target-
+      # Release-plz internally runs `cargo package --allow-dirty --workspace`
+      # (no --no-verify flag, no config option to skip it).  The --verify step
+      # compiles every packaged crate which:
+      #   (a) triggers build.rs → 500 MB CEF download even with SKIP_CEF_DOWNLOAD,
+      #       because the tag commit's build.rs might predate that guard, AND
+      #   (b) places extracted packages under $CARGO_TARGET_DIR/package/ which is
+      #       outside the workspace tree, breaking resolution of inter-workspace
+      #       path deps (webox-engine → webox-config → crates.io → not found).
+      #
+      # Fix: intercept `cargo package` calls via the $CARGO env var and inject
+      # --no-verify.  Release-plz only needs the .crate file list, not a compiled
+      # binary, so skipping verification is safe and makes the step run in seconds.
+      - name: Create cargo wrapper (skip package verification)
+        run: |
+          cat > /tmp/cargo-no-verify << 'WRAPPER'
+          #!/bin/bash
+          args=("$@")
+          for i in "${!args[@]}"; do
+            if [[ "${args[$i]}" == "package" ]]; then
+              args=("${args[@]:0:$((i+1))}" "--no-verify" "${args[@]:$((i+1))}")
+              break
+            fi
+          done
+          exec "/home/runner/.cargo/bin/cargo" "${args[@]}"
+          WRAPPER
+          chmod +x /tmp/cargo-no-verify
 
       - name: Run release-plz
         id: release-plz
@@ -132,13 +152,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-          # Skip the multi-hundred-MB CEF download during `cargo package --verify`.
-          # CEF is loaded dynamically at run time so the package still compiles and
-          # links correctly; the download is only needed for a functional binary.
+          # Skip the CEF download in build.rs (CEF is loaded at runtime, not linked).
           SKIP_CEF_DOWNLOAD: "1"
-          # Route all compiled artifacts to a stable path so the cache above can
-          # preserve them across runs (cargo keys objects on content hash, not path).
-          CARGO_TARGET_DIR: /home/runner/.cargo-release-plz-target
+          # Use the wrapper above so `cargo package` runs with --no-verify.
+          # NOTE: do NOT set CARGO_TARGET_DIR here — when set to an external path it
+          # places extracted packages outside the workspace tree, which breaks
+          # resolution of inter-workspace path deps during --verify.
+          CARGO: /tmp/cargo-no-verify
 
       - name: Debug release-plz outputs
         if: always()
