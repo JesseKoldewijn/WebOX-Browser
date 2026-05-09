@@ -487,9 +487,9 @@ jobs:
           $version = "${{ inputs.version }}"
           if (-not $version) { $version = "0.0.0" }
 
-          # ── Install WiX v4 ──────────────────────────────────────────────────
-          dotnet tool install --global wix
-          wix extension add WixToolset.UI.wixext --global
+          # ── Install WiX v5 (pin to avoid v7's OSMF EULA requirement) ────────
+          dotnet tool install --global wix --version 5.0.2
+          wix extension add WixToolset.UI.wixext/5.0.2 --global
 
           # ── Harvest staging\ into AppFiles.wxs ─────────────────────────────
           # WiX v4 wix harvest is used if available; otherwise we generate
