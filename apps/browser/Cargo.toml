@@ -7,10 +7,10 @@ version.workspace = true
 [dependencies]
 eframe = { version = "0.34.1", default-features = true, features = ["wgpu", "x11", "wayland"] }
 egui_extras = "0.34.1"
-webox-config = { path = "../../crates/config" }
-webox-memory = { path = "../../crates/memory" }
-webox-shell = { path = "../../crates/shell" }
-webox-ui = { path = "../../crates/ui" }
+webox-config = { workspace = true }
+webox-memory = { workspace = true }
+webox-shell = { workspace = true }
+webox-ui = { workspace = true }
 
 [build-dependencies]
 # Used in build.rs to download and stage CEF runtime assets into third_party/cef/

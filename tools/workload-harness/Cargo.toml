@@ -5,7 +5,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-webox-config = { path = "../../crates/config" }
-webox-engine = { path = "../../crates/engine" }
-webox-runtime-api = { path = "../../crates/runtime-api" }
-webox-memory = { path = "../../crates/memory" }
+webox-config = { workspace = true }
+webox-engine = { workspace = true }
+webox-runtime-api = { workspace = true }
+webox-memory = { workspace = true }
