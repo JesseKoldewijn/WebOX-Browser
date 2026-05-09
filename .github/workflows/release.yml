@@ -116,33 +116,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-release-plz-registry-
 
-      # Release-plz internally runs `cargo package --allow-dirty --workspace`
-      # (no --no-verify flag, no config option to skip it).  The --verify step
-      # compiles every packaged crate which:
-      #   (a) triggers build.rs → 500 MB CEF download even with SKIP_CEF_DOWNLOAD,
-      #       because the tag commit's build.rs might predate that guard, AND
-      #   (b) places extracted packages under $CARGO_TARGET_DIR/package/ which is
-      #       outside the workspace tree, breaking resolution of inter-workspace
-      #       path deps (webox-engine → webox-config → crates.io → not found).
-      #
-      # Fix: intercept `cargo package` calls via the $CARGO env var and inject
-      # --no-verify.  Release-plz only needs the .crate file list, not a compiled
-      # binary, so skipping verification is safe and makes the step run in seconds.
-      - name: Create cargo wrapper (skip package verification)
-        run: |
-          cat > /tmp/cargo-no-verify << 'WRAPPER'
-          #!/bin/bash
-          args=("$@")
-          for i in "${!args[@]}"; do
-            if [[ "${args[$i]}" == "package" ]]; then
-              args=("${args[@]:0:$((i+1))}" "--no-verify" "${args[@]:$((i+1))}")
-              break
-            fi
-          done
-          exec "/home/runner/.cargo/bin/cargo" "${args[@]}"
-          WRAPPER
-          chmod +x /tmp/cargo-no-verify
-
       - name: Run release-plz
         id: release-plz
         if: needs.setup.outputs.is_dry_run != 'true'
@@ -153,12 +126,17 @@ jobs:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           # Skip the CEF download in build.rs (CEF is loaded at runtime, not linked).
+          # release-plz runs `cargo package --verify` in a temp git worktree; without
+          # this flag build.rs would trigger a 500 MB CEF download on every run.
+          # The guard is in apps/browser/build.rs — it returns Ok(()) immediately when
+          # this env var is set, so the crate still compiles and links correctly.
+          #
+          # Do NOT set CARGO_TARGET_DIR here.  When pointed at an external path it
+          # moves the extracted package outside the workspace tree, which breaks
+          # relative path deps (e.g. webox-engine → "../../crates/config").  With the
+          # default target dir the extraction lands inside the temp worktree and the
+          # relative paths resolve correctly.
           SKIP_CEF_DOWNLOAD: "1"
-          # Use the wrapper above so `cargo package` runs with --no-verify.
-          # NOTE: do NOT set CARGO_TARGET_DIR here — when set to an external path it
-          # places extracted packages outside the workspace tree, which breaks
-          # resolution of inter-workspace path deps during --verify.
-          CARGO: /tmp/cargo-no-verify
 
       - name: Debug release-plz outputs
         if: always()
