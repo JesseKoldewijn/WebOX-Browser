@@ -1,15 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  WiX v4 installer definition for WebOX Browser.
-
-  Built in CI via:
-    dotnet tool install --global wix
-    wix extension add WixToolset.UI.wixext
-    # PowerShell harvests staging\ into AppFiles.wxs (see build.yml)
-    wix build packaging/windows/webox-browser.wxs AppFiles.wxs \
-        -d "Version=$(VERSION)" \
-        -ext WixToolset.UI.wixext \
-        -o "webox-browser-$(VERSION)-windows-x64.msi"
+  WiX v7 installer definition for WebOX Browser.
+  Built in CI - see the "Build .msi (Windows)" step in .github/workflows/build.yml.
+  The PowerShell harvester generates AppFiles.wxs from the staging directory at build time.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
