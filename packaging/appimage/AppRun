@@ -1,0 +1,15 @@
+#!/bin/sh
+# AppImage entry point for WebOX Browser.
+# Sets up LD_LIBRARY_PATH so the CEF shared libraries bundled alongside
+# the binary are found at runtime, then launches the app.
+
+SELF="$(readlink -f "$0")"
+HERE="${SELF%/*}"
+
+export LD_LIBRARY_PATH="${HERE}/usr/lib/webox-browser${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# Chrome sandbox must be owned by root and setuid. In an AppImage we cannot
+# guarantee that, so disable the sandbox (same as --no-sandbox in Chromium).
+export CHROME_DEVEL_SANDBOX=""
+
+exec "${HERE}/usr/bin/webox-browser-app" "$@"

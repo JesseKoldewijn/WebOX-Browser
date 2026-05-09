@@ -4,14 +4,22 @@ on:
   push:
     branches: [main]
     paths:
+      # Rust source & workspace members
       - 'apps/browser/**'
       - 'crates/**'
       - 'tools/**'
-      - 'Cargo.toml'
+      # Cargo manifests and lockfile (catch-all for any Cargo.toml in the tree)
+      - '**/Cargo.toml'
       - 'Cargo.lock'
+      # Build scripts anywhere in the tree
+      - '**/build.rs'
+      # Rust / Cargo config files
       - '.cargo/**'
       - 'Cross.toml'
       - 'rust-toolchain.toml'
+      # Packaging templates affect installer outputs
+      - 'packaging/**'
+      # This workflow file itself
       - '.github/workflows/build.yml'
   pull_request:
     branches: [main]
@@ -19,11 +27,13 @@ on:
       - 'apps/browser/**'
       - 'crates/**'
       - 'tools/**'
-      - 'Cargo.toml'
+      - '**/Cargo.toml'
       - 'Cargo.lock'
+      - '**/build.rs'
       - '.cargo/**'
       - 'Cross.toml'
       - 'rust-toolchain.toml'
+      - 'packaging/**'
       - '.github/workflows/build.yml'
   workflow_dispatch:
   # Also callable from release.yml to produce release artifacts
@@ -34,7 +44,7 @@ on:
         type: boolean
         default: false
       version:
-        description: "Version string to embed in archive filenames (e.g. '1.2.3'). Omit for unversioned snapshot builds."
+        description: "Version string to embed in archive/installer filenames (e.g. '1.2.3'). Omit for unversioned snapshot builds."
         type: string
         default: ""
     outputs:
@@ -70,6 +80,10 @@ jobs:
               libxkbcommon-dev libssl-dev pkg-config
             artifact_ext: ""
             archive_cmd: tar
+            deb_arch: amd64
+            build_appimage: true
+            build_dmg: false
+            build_msi: false
 
           # ── Linux aarch64 (cross-compiled via `cross`) ────────────────────
           - name: linux-arm64
@@ -81,6 +95,10 @@ jobs:
             sys_deps: ""
             artifact_ext: ""
             archive_cmd: tar
+            deb_arch: arm64
+            build_appimage: false
+            build_dmg: false
+            build_msi: false
 
           # ── macOS ARM64 (Apple Silicon, native) ───────────────────────────
           - name: macos-arm64
@@ -92,6 +110,10 @@ jobs:
             sys_deps: ""
             artifact_ext: ""
             archive_cmd: tar
+            deb_arch: ""
+            build_appimage: false
+            build_dmg: true
+            build_msi: false
 
           # ── Windows x86_64 (native MSVC) ──────────────────────────────────
           - name: windows-x64
@@ -103,6 +125,10 @@ jobs:
             sys_deps: ""
             artifact_ext: ".exe"
             archive_cmd: zip
+            deb_arch: ""
+            build_appimage: false
+            build_dmg: false
+            build_msi: true
 
     runs-on: ${{ matrix.runner }}
     steps:
@@ -175,7 +201,6 @@ jobs:
         if: matrix.archive_cmd == 'tar'
         shell: bash
         run: |
-          # Determine the platform slug from the target
           case "${{ matrix.target }}" in
             x86_64-unknown-linux-gnu)  slug="linux-x64" ;;
             aarch64-unknown-linux-gnu) slug="linux-arm64" ;;
@@ -223,8 +248,8 @@ jobs:
           Compress-Archive -Path staging/* -DestinationPath $archive
           "ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      # ── Upload ───────────────────────────────────────────────────────────────
-      - name: Upload build artifact (tar)
+      # ── Upload archive ────────────────────────────────────────────────────────
+      - name: Upload archive artifact (tar)
         if: matrix.archive_cmd == 'tar'
         uses: actions/upload-artifact@v4
         with:
@@ -232,12 +257,326 @@ jobs:
           path: ${{ env.ARCHIVE }}
           retention-days: 7
 
-      - name: Upload build artifact (zip)
+      - name: Upload archive artifact (zip)
         if: matrix.archive_cmd == 'zip'
         uses: actions/upload-artifact@v4
         with:
           name: webox-browser-${{ matrix.name }}
           path: ${{ env.ARCHIVE }}
+          retention-days: 7
+
+      # ══════════════════════════════════════════════════════════════════════════
+      # ── Native installers ─────────────────────────────────────────────────────
+      # ══════════════════════════════════════════════════════════════════════════
+
+      # ── .deb (Linux x64 + arm64) ──────────────────────────────────────────────
+      - name: Build .deb package (Linux)
+        if: matrix.deb_arch != ''
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then VERSION="0.0.0~snapshot"; fi
+          ARCH="${{ matrix.deb_arch }}"
+          DEB_ROOT="deb-build"
+
+          mkdir -p "${DEB_ROOT}/DEBIAN"
+          mkdir -p "${DEB_ROOT}/usr/lib/webox-browser"
+          mkdir -p "${DEB_ROOT}/usr/bin"
+          mkdir -p "${DEB_ROOT}/usr/share/applications"
+          mkdir -p "${DEB_ROOT}/usr/share/icons/hicolor/256x256/apps"
+
+          # Binary + CEF runtime into /usr/lib/webox-browser/
+          cp -r staging/. "${DEB_ROOT}/usr/lib/webox-browser/"
+          chmod 755 "${DEB_ROOT}/usr/lib/webox-browser/webox-browser-app"
+
+          # Symlink binary into /usr/bin/
+          ln -sf /usr/lib/webox-browser/webox-browser-app \
+                 "${DEB_ROOT}/usr/bin/webox-browser"
+
+          # Desktop entry and icon
+          cp packaging/appimage/webox-browser.desktop \
+             "${DEB_ROOT}/usr/share/applications/"
+          cp packaging/icon.png \
+             "${DEB_ROOT}/usr/share/icons/hicolor/256x256/apps/webox-browser.png"
+
+          # Generate control file (inject version, arch, installed-size)
+          INSTALLED_KB=$(du -sk "${DEB_ROOT}/usr" | cut -f1)
+          sed "s/VERSION/${VERSION}/g; s/ARCH/${ARCH}/g; s/INSTALLED_SIZE/${INSTALLED_KB}/g" \
+              packaging/deb/control.template > "${DEB_ROOT}/DEBIAN/control"
+
+          # Post-install script
+          cp packaging/deb/postinst "${DEB_ROOT}/DEBIAN/postinst"
+          chmod 755 "${DEB_ROOT}/DEBIAN/postinst"
+
+          DEB_FILE="webox-browser-${VERSION}-${{ matrix.name }}.deb"
+          dpkg-deb --build --root-owner-group "${DEB_ROOT}" "${DEB_FILE}"
+          echo "DEB_FILE=${DEB_FILE}" >> "$GITHUB_ENV"
+
+      - name: Upload .deb artifact
+        if: matrix.deb_arch != '' && env.DEB_FILE != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: webox-browser-${{ matrix.name }}-deb
+          path: ${{ env.DEB_FILE }}
+          retention-days: 7
+
+      # ── AppImage (Linux x64 only) ──────────────────────────────────────────────
+      - name: Build AppImage (Linux x64)
+        if: matrix.build_appimage == true
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then VERSION="0.0.0-snapshot"; fi
+
+          APPDIR="AppDir"
+          mkdir -p "${APPDIR}/usr/bin"
+          mkdir -p "${APPDIR}/usr/lib/webox-browser"
+          mkdir -p "${APPDIR}/usr/share/applications"
+          mkdir -p "${APPDIR}/usr/share/icons/hicolor/256x256/apps"
+
+          # Copy CEF runtime into the lib dir and binary into usr/bin/
+          cp -r staging/. "${APPDIR}/usr/lib/webox-browser/"
+          mv "${APPDIR}/usr/lib/webox-browser/webox-browser-app" \
+             "${APPDIR}/usr/bin/webox-browser-app"
+          chmod 755 "${APPDIR}/usr/bin/webox-browser-app"
+
+          # AppImage requires the .desktop file and icon at the AppDir root
+          cp packaging/appimage/webox-browser.desktop "${APPDIR}/"
+          cp packaging/appimage/webox-browser.desktop \
+             "${APPDIR}/usr/share/applications/"
+          cp packaging/icon.png \
+             "${APPDIR}/usr/share/icons/hicolor/256x256/apps/webox-browser.png"
+          # AppImage also expects icon at root (without extension)
+          cp packaging/icon.png "${APPDIR}/webox-browser.png"
+
+          # AppRun entry point
+          cp packaging/appimage/AppRun "${APPDIR}/AppRun"
+          chmod +x "${APPDIR}/AppRun"
+
+          # Download appimagetool; use APPIMAGE_EXTRACT_AND_RUN=1 to avoid
+          # needing FUSE on the GitHub Actions runner
+          wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" \
+               -O appimagetool
+          chmod +x appimagetool
+
+          APPIMAGE_FILE="webox-browser-${VERSION}-linux-x64.AppImage"
+          APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool --no-appstream \
+              "${APPDIR}" "${APPIMAGE_FILE}"
+          echo "APPIMAGE_FILE=${APPIMAGE_FILE}" >> "$GITHUB_ENV"
+
+      - name: Upload AppImage artifact
+        if: matrix.build_appimage == true && env.APPIMAGE_FILE != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: webox-browser-linux-x64-appimage
+          path: ${{ env.APPIMAGE_FILE }}
+          retention-days: 7
+
+      # ── PKGBUILD (Linux x64 — generated from template, validated in Docker) ──
+      - name: Generate and validate PKGBUILD (Linux x64)
+        if: matrix.name == 'linux-x64'
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then VERSION="0.0.0"; fi
+
+          # Compute SHA256 of the tarball we just built
+          TARBALL="${{ env.ARCHIVE }}"
+          SHA256=$(sha256sum "${TARBALL}" | awk '{print $1}')
+
+          # Substitute placeholders in the template
+          sed "s/VERSION/${VERSION}/g; s/SHA256_TARBALL/${SHA256}/g" \
+              packaging/arch/PKGBUILD.template > PKGBUILD
+
+          # Validate: source the PKGBUILD and check required variables are set
+          bash -c 'source PKGBUILD && \
+            [ -n "$pkgname" ] && [ -n "$pkgver" ] && [ -n "$pkgrel" ] && \
+            echo "PKGBUILD OK: pkgname=$pkgname pkgver=$pkgver"'
+
+          # Generate .SRCINFO using Arch Linux Docker image
+          # (makepkg --printsrcinfo is the authoritative SRCINFO generator)
+          docker run --rm \
+            -v "$PWD:/pkg" \
+            -w /pkg \
+            archlinux/archlinux:latest \
+            bash -c "
+              pacman -Sy --noconfirm --needed base-devel 2>/dev/null
+              useradd -m builder
+              chown builder /pkg
+              su builder -c 'cd /pkg && makepkg --printsrcinfo > .SRCINFO'
+            "
+
+          echo "PKGBUILD_READY=true" >> "$GITHUB_ENV"
+
+      - name: Upload PKGBUILD + .SRCINFO artifacts
+        if: matrix.name == 'linux-x64' && env.PKGBUILD_READY == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: webox-browser-linux-x64-pkgbuild
+          path: |
+            PKGBUILD
+            .SRCINFO
+          retention-days: 7
+
+      # ── .dmg (macOS arm64) ────────────────────────────────────────────────────
+      - name: Build .dmg (macOS)
+        if: matrix.build_dmg == true
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then VERSION="0.0.0-snapshot"; fi
+
+          APP_BUNDLE="WeboxBrowser.app"
+          mkdir -p "${APP_BUNDLE}/Contents/MacOS"
+          mkdir -p "${APP_BUNDLE}/Contents/Resources"
+
+          # Binary + CEF runtime all live alongside each other in Contents/MacOS/
+          # (build.rs sets @rpath to @executable_path so dylibs resolve correctly)
+          cp -r staging/. "${APP_BUNDLE}/Contents/MacOS/"
+          chmod 755 "${APP_BUNDLE}/Contents/MacOS/webox-browser-app"
+
+          # Info.plist (inject version)
+          sed "s/VERSION/${VERSION}/g" packaging/macos/Info.plist.template \
+              > "${APP_BUNDLE}/Contents/Info.plist"
+
+          # Convert PNG icon → .icns using sips + iconutil (both pre-installed on macOS runners)
+          mkdir -p AppIcon.iconset
+          for size in 16 32 64 128 256 512; do
+            sips -z ${size} ${size} packaging/icon.png \
+                --out "AppIcon.iconset/icon_${size}x${size}.png" 2>/dev/null || true
+          done
+          # @2x variants for retina
+          for size in 16 32 64 128 256; do
+            double=$((size * 2))
+            sips -z ${double} ${double} packaging/icon.png \
+                --out "AppIcon.iconset/icon_${size}x${size}@2x.png" 2>/dev/null || true
+          done
+          iconutil -c icns AppIcon.iconset -o AppIcon.icns || true
+          if [ -f AppIcon.icns ]; then
+            cp AppIcon.icns "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
+          fi
+
+          DMG_FILE="webox-browser-${VERSION}-${{ matrix.name }}.dmg"
+
+          # Create a read/write image, copy .app in, then convert to compressed UDZO
+          hdiutil create -size 2g -fs HFS+ -volname "WebOX Browser" \
+              -o "rw_tmp.dmg" 2>/dev/null
+          hdiutil attach rw_tmp.dmg -mountpoint /Volumes/WebOXBrowser
+          cp -r "${APP_BUNDLE}" /Volumes/WebOXBrowser/
+          # Add a symlink to /Applications for drag-install UX
+          ln -s /Applications /Volumes/WebOXBrowser/Applications
+          hdiutil detach /Volumes/WebOXBrowser
+          hdiutil convert rw_tmp.dmg -format UDZO -o "${DMG_FILE}"
+          rm rw_tmp.dmg
+
+          echo "DMG_FILE=${DMG_FILE}" >> "$GITHUB_ENV"
+
+      - name: Upload .dmg artifact
+        if: matrix.build_dmg == true && env.DMG_FILE != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: webox-browser-${{ matrix.name }}-dmg
+          path: ${{ env.DMG_FILE }}
+          retention-days: 7
+
+      # ── .msi (Windows x64) ────────────────────────────────────────────────────
+      - name: Build .msi (Windows)
+        if: matrix.build_msi == true
+        shell: pwsh
+        run: |
+          $version = "${{ inputs.version }}"
+          if (-not $version) { $version = "0.0.0" }
+
+          # ── Install WiX v7 (pass -acceptEula wix7 on each command for CI) ──
+          dotnet tool install --global wix
+          wix extension add WixToolset.UI.wixext -acceptEula wix7 --global
+
+          # ── Harvest staging\ into AppFiles.wxs ─────────────────────────────
+          # WiX v4 wix harvest is used if available; otherwise we generate
+          # the fragment with PowerShell to guarantee correctness.
+          $stagingPath = (Resolve-Path "staging").Path
+          $appFilesWxs = "AppFiles.wxs"
+
+          # Build a flat list of components — handles one level of subdirectory
+          # (CEF ships locales/ as the only subdir).
+          $sb = [System.Text.StringBuilder]::new()
+          $null = $sb.AppendLine('<?xml version="1.0" encoding="UTF-8"?>')
+          $null = $sb.AppendLine('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">')
+          $null = $sb.AppendLine('  <Fragment>')
+
+          # Sub-directories: reference INSTALLFOLDER (already declared in webox-browser.wxs)
+          # and nest sub-directory IDs inside it via DirectoryRef to avoid duplicate-id errors.
+          $subdirs = Get-ChildItem -Path $stagingPath -Directory
+          if ($subdirs) {
+            $null = $sb.AppendLine('    <DirectoryRef Id="INSTALLFOLDER">')
+            foreach ($sd in $subdirs) {
+              $dirId = "dir_$($sd.Name -replace '[^\w]','_')"
+              $null = $sb.AppendLine("      <Directory Id=""$dirId"" Name=""$($sd.Name)"" />")
+            }
+            $null = $sb.AppendLine('    </DirectoryRef>')
+          }
+
+          # Top-level files component group
+          $null = $sb.AppendLine('    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">')
+          Get-ChildItem -Path $stagingPath -File | ForEach-Object {
+            $fid = "f_$($_.Name -replace '[^\w]','_')"
+            $null = $sb.AppendLine("      <Component>")
+            $null = $sb.AppendLine("        <File Id=""$fid"" Source=""staging\$($_.Name)"" />")
+            $null = $sb.AppendLine("      </Component>")
+          }
+          $null = $sb.AppendLine('    </ComponentGroup>')
+
+          # Subdirectory component groups
+          foreach ($sd in $subdirs) {
+            $dirId = "dir_$($sd.Name -replace '[^\w]','_')"
+            $cgId  = "AppFiles_$($sd.Name -replace '[^\w]','_')"
+            $null = $sb.AppendLine("    <ComponentGroup Id=""$cgId"" Directory=""$dirId"">")
+            Get-ChildItem -Path $sd.FullName -File | ForEach-Object {
+              $fid = "f_$($sd.Name)_$($_.Name -replace '[^\w]','_')"
+              $null = $sb.AppendLine("      <Component>")
+              $null = $sb.AppendLine("        <File Id=""$fid"" Source=""staging\$($sd.Name)\$($_.Name)"" />")
+              $null = $sb.AppendLine("      </Component>")
+            }
+            $null = $sb.AppendLine('    </ComponentGroup>')
+          }
+
+          $null = $sb.AppendLine('  </Fragment>')
+          $null = $sb.AppendLine('</Wix>')
+          $sb.ToString() | Out-File -FilePath $appFilesWxs -Encoding utf8NoBOM
+
+          # Also generate a feature-ref fragment for subdirectory component groups
+          $extraRefs = ""
+          foreach ($sd in $subdirs) {
+            $cgId = "AppFiles_$($sd.Name -replace '[^\w]','_')"
+            $extraRefs += "      <ComponentGroupRef Id=""$cgId"" />`n"
+          }
+
+          # Patch webox-browser.wxs to inject subdirectory refs into the Feature
+          $wxsContent = Get-Content packaging/windows/webox-browser.wxs -Raw
+          if ($extraRefs -and -not ($wxsContent -match 'AppFiles_')) {
+            $wxsContent = $wxsContent -replace `
+              '(<ComponentGroupRef Id="AppFiles" />)', `
+              "`$1`n$extraRefs"
+            $wxsContent | Out-File -FilePath packaging/windows/webox-browser.wxs `
+                           -Encoding utf8NoBOM
+          }
+
+          # ── Build the MSI ───────────────────────────────────────────────────
+          $msiFile = "webox-browser-${version}-windows-x64.msi"
+          wix build packaging/windows/webox-browser.wxs $appFilesWxs `
+              -d "Version=$version" `
+              -ext WixToolset.UI.wixext `
+              -acceptEula wix7 `
+              -o $msiFile
+
+          "MSI_FILE=$msiFile" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload .msi artifact
+        if: matrix.build_msi == true && env.MSI_FILE != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: webox-browser-windows-x64-msi
+          path: ${{ env.MSI_FILE }}
           retention-days: 7
 
   # ── Collect outputs for callers ──────────────────────────────────────────────
@@ -247,6 +586,6 @@ jobs:
     needs: build
     outputs:
       artifact_names: >-
-        webox-browser-linux-x64,webox-browser-linux-arm64,webox-browser-macos-arm64,webox-browser-windows-x64
+        webox-browser-linux-x64,webox-browser-linux-arm64,webox-browser-macos-arm64,webox-browser-windows-x64,webox-browser-linux-x64-deb,webox-browser-linux-arm64-deb,webox-browser-linux-x64-appimage,webox-browser-linux-x64-pkgbuild,webox-browser-macos-arm64-dmg,webox-browser-windows-x64-msi
     steps:
-      - run: echo "All builds complete"
+      - run: echo "All builds and installers complete"
