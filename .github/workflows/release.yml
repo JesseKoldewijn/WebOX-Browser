@@ -104,6 +104,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          # Skip the multi-hundred-MB CEF download during `cargo package --verify`.
+          # CEF is loaded dynamically at run time so the package still compiles and
+          # links correctly; the download is only needed for a functional binary.
+          SKIP_CEF_DOWNLOAD: "1"
 
       - name: Debug release-plz outputs
         if: always()
