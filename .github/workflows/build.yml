@@ -504,17 +504,16 @@ jobs:
           $null = $sb.AppendLine('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">')
           $null = $sb.AppendLine('  <Fragment>')
 
-          # Sub-directories: declare them under INSTALLFOLDER
+          # Sub-directories: reference INSTALLFOLDER (already declared in webox-browser.wxs)
+          # and nest sub-directory IDs inside it via DirectoryRef to avoid duplicate-id errors.
           $subdirs = Get-ChildItem -Path $stagingPath -Directory
           if ($subdirs) {
-            $null = $sb.AppendLine('    <StandardDirectory Id="ProgramFilesFolder">')
-            $null = $sb.AppendLine('      <Directory Id="INSTALLFOLDER" Name="WebOX Browser">')
+            $null = $sb.AppendLine('    <DirectoryRef Id="INSTALLFOLDER">')
             foreach ($sd in $subdirs) {
               $dirId = "dir_$($sd.Name -replace '[^\w]','_')"
-              $null = $sb.AppendLine("        <Directory Id=""$dirId"" Name=""$($sd.Name)"" />")
+              $null = $sb.AppendLine("      <Directory Id=""$dirId"" Name=""$($sd.Name)"" />")
             }
-            $null = $sb.AppendLine('      </Directory>')
-            $null = $sb.AppendLine('    </StandardDirectory>')
+            $null = $sb.AppendLine('    </DirectoryRef>')
           }
 
           # Top-level files component group
