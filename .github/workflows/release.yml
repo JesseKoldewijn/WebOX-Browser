@@ -98,6 +98,31 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # Cache crate downloads so `cargo package --verify` doesn't re-fetch deps.
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-release-plz-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-release-plz-registry-
+
+      # Cache compiled artifacts produced by `cargo package --verify`.
+      # release-plz checks out each tag commit into a temp worktree and runs
+      # cargo build there; pointing CARGO_TARGET_DIR at a fixed cached path
+      # means subsequent runs reuse the compiled objects instead of rebuilding.
+      - name: Cache release-plz build artifacts
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo-release-plz-target/
+          key: ${{ runner.os }}-release-plz-target-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/*.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-release-plz-target-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-release-plz-target-
+
       - name: Run release-plz
         id: release-plz
         if: needs.setup.outputs.is_dry_run != 'true'
@@ -111,6 +136,9 @@ jobs:
           # CEF is loaded dynamically at run time so the package still compiles and
           # links correctly; the download is only needed for a functional binary.
           SKIP_CEF_DOWNLOAD: "1"
+          # Route all compiled artifacts to a stable path so the cache above can
+          # preserve them across runs (cargo keys objects on content hash, not path).
+          CARGO_TARGET_DIR: /home/runner/.cargo-release-plz-target
 
       - name: Debug release-plz outputs
         if: always()
