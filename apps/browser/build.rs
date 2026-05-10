@@ -198,19 +198,58 @@ fn copy_to_bin_dir(src: &Path, bin_dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Recursively copy all files from `src` into `dst`, preserving sub-directories.
-/// Skips files that already exist at the destination (idempotent).
+/// Names of build-time-only entries inside a CEF distribution directory that
+/// must **not** be included in the staged runtime or shipped in release archives.
+///
+/// These are developer-facing headers, cmake integration files, and docs that
+/// are needed when building CEF itself or embedding CEF in a C++ project, but
+/// are never loaded at run time by the browser binary.
+const CEF_DEV_ARTIFACTS: &[&str] = &[
+    "include",        // C++ header tree (~6 MB)
+    "libcef_dll",     // C++ wrapper source tree
+    "cmake",          // CMake helper scripts
+    "CMakeLists.txt", // Top-level CMake file
+    "CREDITS.html",   // 18 MB credits document — not a runtime asset
+    "bin",            // Developer symlinks (e.g. libcef.so symlink variants)
+];
+
+/// Returns `true` if `name` is a build-time-only CEF artifact that should be
+/// excluded from staged runtime directories and release archives.
+fn is_cef_dev_artifact(name: &std::ffi::OsStr) -> bool {
+    CEF_DEV_ARTIFACTS
+        .iter()
+        .any(|&excluded| name == excluded)
+}
+
+/// Recursively copy runtime files from `src` into `dst`, preserving
+/// sub-directories.
+///
+/// Build-time-only CEF artifacts (headers, cmake files, etc.) are skipped so
+/// that only the files actually needed at run time end up in the staging dir
+/// and, by extension, in release archives.
+///
+/// Files are always overwritten so that a CEF version upgrade replaces stale
+/// files from a previous build rather than silently leaving them in place.
 fn copy_dir_contents(src: &Path, dst: &Path) -> anyhow::Result<()> {
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let name = entry.file_name();
+
+        // Exclude build-time artifacts — they bloat archives and serve no
+        // purpose at run time.
+        if is_cef_dev_artifact(&name) {
+            continue;
+        }
+
         let src_path = entry.path();
         let dst_path = dst.join(&name);
 
         if src_path.is_dir() {
             fs::create_dir_all(&dst_path)?;
             copy_dir_contents(&src_path, &dst_path)?;
-        } else if !dst_path.exists() {
+        } else {
+            // Always overwrite: handles CEF upgrades where the slug directory
+            // already exists with files from the previous CEF version.
             fs::copy(&src_path, &dst_path)?;
         }
     }

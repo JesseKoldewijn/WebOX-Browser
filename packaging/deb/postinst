@@ -11,6 +11,16 @@ case "$1" in
     if command -v gtk-update-icon-cache >/dev/null 2>&1; then
       gtk-update-icon-cache /usr/share/icons/hicolor || true
     fi
+    # CEF's renderer sandbox requires chrome-sandbox to be owned by root and
+    # have the setuid bit (mode 4755). This is standard practice for all
+    # Chromium-based browsers (Chrome, Electron, etc.). Without it the CEF
+    # sandbox is non-functional and the browser may refuse to start or fall
+    # back to --no-sandbox, which weakens security.
+    SANDBOX="/usr/lib/webox-browser/chrome-sandbox"
+    if [ -f "$SANDBOX" ]; then
+      chown root:root "$SANDBOX" || true
+      chmod 4755      "$SANDBOX" || true
+    fi
     ;;
 esac
 

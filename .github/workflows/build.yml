@@ -211,9 +211,16 @@ jobs:
             aarch64-apple-darwin)      slug="macos-arm64" ;;
             x86_64-apple-darwin)       slug="macos-x64" ;;
           esac
-          if [ -d "third_party/cef/$slug" ]; then
-            cp -r "third_party/cef/$slug/." staging/
+          cef_dir="third_party/cef/$slug"
+          # cargo build runs build.rs which downloads and stages CEF into this
+          # directory. If it is absent something went wrong upstream — fail loudly
+          # rather than silently shipping an archive with no CEF runtime.
+          if [ ! -d "$cef_dir" ]; then
+            echo "::error::CEF staging directory missing: $cef_dir"
+            echo "::error::cargo build should have populated it via build.rs."
+            exit 1
           fi
+          cp -r "$cef_dir/." staging/
 
       - name: Copy CEF runtime into staging (Windows)
         if: matrix.archive_cmd == 'zip'
@@ -221,9 +228,11 @@ jobs:
         run: |
           $slug = "windows-x64"
           $cef_dir = "third_party/cef/$slug"
-          if (Test-Path $cef_dir) {
-            Copy-Item "$cef_dir/*" -Destination staging/ -Recurse -Force
+          if (-not (Test-Path $cef_dir)) {
+            Write-Error "CEF staging directory missing: $cef_dir — cargo build should have populated it via build.rs."
+            exit 1
           }
+          Copy-Item "$cef_dir/*" -Destination staging/ -Recurse -Force
 
       # ── Archive ─────────────────────────────────────────────────────────────
       - name: Create tar.gz archive (Linux/macOS)
@@ -239,6 +248,20 @@ jobs:
           tar -czf "$ARCHIVE" -C staging .
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
+      - name: Verify CEF present in archive (Linux/macOS)
+        if: matrix.archive_cmd == 'tar'
+        shell: bash
+        run: |
+          # Fail the build if the primary CEF library is missing from the archive.
+          # This catches regressions where CEF staging silently produced an empty dir.
+          if ! tar -tzf "$ARCHIVE" | grep -qE 'libcef\.(so|dylib)'; then
+            echo "::error::Primary CEF library (libcef.so / libcef.dylib) is missing from $ARCHIVE"
+            echo "::error::Archive contents:"
+            tar -tzf "$ARCHIVE" | head -40
+            exit 1
+          fi
+          echo "CEF verified in archive: $(tar -tzf "$ARCHIVE" | grep -E 'libcef\.(so|dylib)' | head -1)"
+
       - name: Create zip archive (Windows)
         if: matrix.archive_cmd == 'zip'
         shell: pwsh
@@ -251,6 +274,21 @@ jobs:
           }
           Compress-Archive -Path staging/* -DestinationPath $archive
           "ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Verify CEF present in archive (Windows)
+        if: matrix.archive_cmd == 'zip'
+        shell: pwsh
+        run: |
+          # Fail the build if the primary CEF library is missing from the archive.
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($env:ARCHIVE)
+          $hasCef = $zip.Entries | Where-Object { $_.Name -like 'libcef*' }
+          $zip.Dispose()
+          if (-not $hasCef) {
+            Write-Error "Primary CEF library (libcef.dll) is missing from $env:ARCHIVE"
+            exit 1
+          }
+          Write-Host "CEF verified in archive: $($hasCef[0].FullName)"
 
       # ── Upload archive ────────────────────────────────────────────────────────
       - name: Upload archive artifact (tar)
