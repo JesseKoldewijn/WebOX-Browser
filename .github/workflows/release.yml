@@ -76,13 +76,18 @@ jobs:
 
       - name: Check backfill mode
         id: backfill
+        # Pass the tag via env rather than direct ${{ }} interpolation so that
+        # shell metacharacters in the input (backticks, $(...), etc.) are never
+        # executed by the shell interpreter.
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           # Backfill mode is active when a tag is provided via workflow_dispatch.
           # In this mode we skip release-plz entirely and go straight to
           # build → attach for the specified existing GitHub Release tag.
-          if [[ -n "${{ inputs.tag }}" ]]; then
+          if [[ -n "$INPUT_TAG" ]]; then
             echo "is_backfill=true" >> $GITHUB_OUTPUT
-            echo "Backfill mode: tag=${{ inputs.tag }}"
+            echo "Backfill mode: tag=$INPUT_TAG"
           else
             echo "is_backfill=false" >> $GITHUB_OUTPUT
           fi
@@ -106,8 +111,18 @@ jobs:
     steps:
       - name: Parse tag and version
         id: parse
+        # Pass the tag via env to prevent shell metacharacter injection.
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          TAG="${{ inputs.tag }}"
+          TAG="$INPUT_TAG"
+          # Validate tag format before doing anything else — reject inputs that
+          # contain characters that could cause injection or produce garbage
+          # archive names. Expected shape: <name>-v<major>.<minor>.<patch>[…]
+          if [[ ! "$TAG" =~ ^[a-zA-Z0-9._-]+-v[0-9]+\.[0-9]+\.[0-9]+[a-zA-Z0-9._-]*$ ]]; then
+            echo "::error::Invalid tag format: '${TAG}'. Expected: <name>-v<semver> (e.g. webox-browser-app-v1.2.3)"
+            exit 1
+          fi
           # Strip any prefix (e.g. "webox-browser-app-v") to get plain semver.
           VERSION=$(echo "$TAG" | grep -oP '\d+\.\d+\.\d+.*' || true)
           if [[ -z "$VERSION" ]]; then
