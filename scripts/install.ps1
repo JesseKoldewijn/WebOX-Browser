@@ -100,7 +100,7 @@ try {
     Write-Ok "Installed webox-browser $Version to $InstallDir"
     Write-Ok "Run: webox-browser-app.exe"
     Write-Ok ""
-    Write-Ok "Or create a shortcut/alias: `$binaryPath`"
+    Write-Ok "Or create a shortcut/alias: ``$binaryPath``"
 }
 finally {
     Remove-Item -Path $tmpDir -Recurse -Force -ErrorAction SilentlyContinue

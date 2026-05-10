@@ -24,6 +24,15 @@ on:
         required: false
         default: false
         type: boolean
+      tag:
+        description: |
+          Existing release tag to backfill with artifacts
+          (e.g. webox-browser-app-v0.1.1).
+          When set, skips release-plz and goes straight to build → attach.
+          Use this to attach binaries to a release that was created without them.
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: release-${{ github.ref }}
@@ -33,13 +42,14 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ── Gate: skip release commits (prevents infinite loops) ─────────────────────
+  # ── Gate: skip release commits + detect run mode ──────────────────────────────
   setup:
     name: Setup
     runs-on: ubuntu-latest
     outputs:
       should_skip: ${{ steps.skip.outputs.should_skip }}
-      is_dry_run: ${{ steps.dry.outputs.is_dry_run }}
+      is_dry_run:  ${{ steps.dry.outputs.is_dry_run }}
+      is_backfill: ${{ steps.backfill.outputs.is_backfill }}
     steps:
       - name: Check skip conditions
         id: skip
@@ -64,6 +74,87 @@ jobs:
             echo "is_dry_run=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Check backfill mode
+        id: backfill
+        run: |
+          # Backfill mode is active when a tag is provided via workflow_dispatch.
+          # In this mode we skip release-plz entirely and go straight to
+          # build → attach for the specified existing GitHub Release tag.
+          if [[ -n "${{ inputs.tag }}" ]]; then
+            echo "is_backfill=true" >> $GITHUB_OUTPUT
+            echo "Backfill mode: tag=${{ inputs.tag }}"
+          else
+            echo "is_backfill=false" >> $GITHUB_OUTPUT
+          fi
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # ── BACKFILL PATH ─────────────────────────────────────────────────────────────
+  # Used via workflow_dispatch with a non-empty `tag` input to attach binaries
+  # to an already-created GitHub Release (e.g. v0.1.0, v0.1.1) that is missing
+  # its build artifacts.
+  # ══════════════════════════════════════════════════════════════════════════════
+
+  # ── Parse tag → semver ────────────────────────────────────────────────────────
+  backfill-setup:
+    name: Backfill Setup
+    runs-on: ubuntu-latest
+    needs: setup
+    if: needs.setup.outputs.is_backfill == 'true'
+    outputs:
+      tag:     ${{ steps.parse.outputs.tag }}
+      version: ${{ steps.parse.outputs.version }}
+    steps:
+      - name: Parse tag and version
+        id: parse
+        run: |
+          TAG="${{ inputs.tag }}"
+          # Strip any prefix (e.g. "webox-browser-app-v") to get plain semver.
+          VERSION=$(echo "$TAG" | grep -oP '\d+\.\d+\.\d+.*' || true)
+          if [[ -z "$VERSION" ]]; then
+            echo "::error::Could not extract semver from tag: ${TAG}"
+            exit 1
+          fi
+          echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Backfilling: tag=${TAG}  version=${VERSION}"
+
+  # ── Build for the backfill tag ────────────────────────────────────────────────
+  backfill-build:
+    name: Backfill Build
+    needs: backfill-setup
+    # Only run when backfill-setup actually succeeded (not just skipped).
+    if: needs.backfill-setup.result == 'success'
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.backfill-setup.outputs.version }}
+
+  # ── Attach artifacts to the existing GitHub Release ───────────────────────────
+  backfill-attach:
+    name: Backfill — Attach artifacts to GitHub Release
+    runs-on: ubuntu-latest
+    needs: [backfill-setup, backfill-build]
+    if: needs.backfill-setup.result == 'success' && needs.backfill-build.result == 'success'
+    permissions:
+      contents: write
+    steps:
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: webox-browser-*
+          merge-multiple: true
+          path: dist/
+
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.backfill-setup.outputs.tag }}
+          files: dist/*
+          fail_on_unmatched_files: false
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # ── NORMAL RELEASE PATH (release-plz driven) ──────────────────────────────────
+  # ══════════════════════════════════════════════════════════════════════════════
+
   # ── release-plz: opens/updates release PR or publishes release ───────────────
   # release-plz works in two modes:
   #   1. On every push to main: creates/updates a "release PR" that bumps
@@ -73,7 +164,10 @@ jobs:
     name: release-plz
     runs-on: ubuntu-latest
     needs: setup
-    if: needs.setup.outputs.should_skip != 'true'
+    # Skip when: it's a release commit (loop guard), OR we're in backfill mode.
+    if: |
+      needs.setup.outputs.should_skip != 'true' &&
+      needs.setup.outputs.is_backfill != 'true'
     permissions:
       contents: write
       pull-requests: write
