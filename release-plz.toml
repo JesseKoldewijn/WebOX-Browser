@@ -17,10 +17,11 @@ git_only = true
 # Do not publish to crates.io (this is an app, not a library crate).
 publish = false
 
-# git_release_enable must be set explicitly because release-plz defaults
-# it to the same value as `publish`. With publish = false it would
-# otherwise silently skip creating GitHub Releases entirely.
-git_release_enable = true
+# git_release_enable: only the app binary deserves a GitHub Release entry.
+# Library crates are internal; they get version bumps and tags but no
+# release page. Defaults to false here so all 7 lib crates are excluded,
+# then the [[package]] section below re-enables it for webox-browser-app.
+git_release_enable = false
 
 # Update CHANGELOG.md for all workspace packages on every release.
 changelog_update = true
@@ -39,3 +40,11 @@ allow_dirty = true
 # here. Disabling it also avoids the cargo check pass that triggers
 # build.rs and causes the third_party/cef/ dirty-tree problem.
 semver_check = false
+
+# ── Per-package overrides ─────────────────────────────────────────────────────
+# Only the app crate gets a GitHub Release page. The library crates are
+# versioned and tagged (so the changelog and git history stay clean) but they
+# do not need a release page visible to end users.
+[[package]]
+name = "webox-browser-app"
+git_release_enable = true

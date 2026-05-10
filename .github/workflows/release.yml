@@ -82,6 +82,8 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
       # Strip leading 'v' for use in archive filenames
       version: ${{ steps.version.outputs.version }}
+      # True only when the app crate itself was released (not just lib crates)
+      app_released: ${{ steps.version.outputs.app_released }}
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -161,21 +163,38 @@ jobs:
       - name: Extract version from releases JSON
         id: version
         run: |
-          # releases output is a JSON array; grab the tag of the first release
+          # releases output is a JSON array of objects with {package_name, tag, version, …}.
+          # With git_release_enable=true only for webox-browser-app the array will only
+          # ever contain that one entry when a GitHub Release was created, but we filter
+          # explicitly by package name to be safe.
           RELEASES='${{ steps.release-plz.outputs.releases }}'
           if [[ -n "$RELEASES" && "$RELEASES" != "null" && "$RELEASES" != "[]" ]]; then
-            TAG=$(echo "$RELEASES" | jq -r '.[0].tag // ""')
+            # Prefer the app package entry; fall back to first entry if absent.
+            TAG=$(echo "$RELEASES" | jq -r '
+              (map(select(.package_name == "webox-browser-app")) | .[0].tag) //
+              .[0].tag //
+              ""
+            ')
+            APP_RELEASED=$(echo "$RELEASES" | jq -r '
+              if (map(select(.package_name == "webox-browser-app")) | length) > 0
+              then "true" else "false" end
+            ')
           else
             TAG=""
+            APP_RELEASED="false"
           fi
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          # Extract semver from tag — handles both plain "v0.1.0" and
+          # prefixed "webox-browser-app-v0.1.0" formats.
+          VERSION=$(echo "$TAG" | grep -oP '\d+\.\d+\.\d+.*' || true)
+          echo "tag=${TAG}"          >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}"  >> "$GITHUB_OUTPUT"
+          echo "app_released=${APP_RELEASED}" >> "$GITHUB_OUTPUT"
 
   # ── Build release artifacts (reuses build.yml matrix, no duplication) ─────────
   build-release-artifacts:
     name: Build Release Artifacts
     needs: release-plz
-    if: needs.release-plz.outputs.releases_created == 'true'
+    if: needs.release-plz.outputs.app_released == 'true'
     uses: ./.github/workflows/build.yml
     with:
       version: ${{ needs.release-plz.outputs.version }}
