@@ -252,15 +252,31 @@ jobs:
         if: matrix.archive_cmd == 'tar'
         shell: bash
         run: |
-          # Fail the build if the primary CEF library is missing from the archive.
-          # This catches regressions where CEF staging silently produced an empty dir.
-          if ! tar -tzf "$ARCHIVE" | grep -qE 'libcef\.(so|dylib)'; then
-            echo "::error::Primary CEF library (libcef.so / libcef.dylib) is missing from $ARCHIVE"
-            echo "::error::Archive contents:"
-            tar -tzf "$ARCHIVE" | head -40
+          # Write the archive listing to a temp file before grepping.
+          # grep -q exits as soon as it finds a match, sending SIGPIPE to tar.
+          # With pipefail enabled that non-zero tar exit becomes the pipeline
+          # result, producing a false "missing" failure even when libcef is
+          # present. A temp file avoids the pipe entirely.
+          tmplist=$(mktemp)
+          tar -tzf "$ARCHIVE" > "$tmplist"
+
+          # Platform-specific primary CEF library path pattern:
+          #   Linux: flat libcef.so alongside the binary
+          #   macOS: Chromium Embedded Framework bundle (no .dylib on the main binary)
+          case "${{ matrix.target }}" in
+            *-linux-*)  cef_pattern='libcef\.so' ;;
+            *-apple-*)  cef_pattern='Chromium Embedded Framework\.framework' ;;
+          esac
+
+          if ! grep -qE "$cef_pattern" "$tmplist"; then
+            echo "::error::Primary CEF library missing from $ARCHIVE (pattern: $cef_pattern)"
+            echo "::error::Archive contents (first 40 entries):"
+            head -40 "$tmplist"
+            rm "$tmplist"
             exit 1
           fi
-          echo "CEF verified in archive: $(tar -tzf "$ARCHIVE" | grep -E 'libcef\.(so|dylib)' | head -1)"
+          echo "CEF verified in archive: $(grep -E "$cef_pattern" "$tmplist" | head -1)"
+          rm "$tmplist"
 
       - name: Create zip archive (Windows)
         if: matrix.archive_cmd == 'zip'

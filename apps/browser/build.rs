@@ -216,9 +216,7 @@ const CEF_DEV_ARTIFACTS: &[&str] = &[
 /// Returns `true` if `name` is a build-time-only CEF artifact that should be
 /// excluded from staged runtime directories and release archives.
 fn is_cef_dev_artifact(name: &std::ffi::OsStr) -> bool {
-    CEF_DEV_ARTIFACTS
-        .iter()
-        .any(|&excluded| name == excluded)
+    CEF_DEV_ARTIFACTS.iter().any(|&excluded| name == excluded)
 }
 
 /// Recursively copy runtime files from `src` into `dst`, preserving

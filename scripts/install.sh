@@ -52,8 +52,8 @@ if $SYSTEM_INSTALL; then
 fi
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
-info()  { printf '\033[0;34m[webox]\033[0m %s\n' "$*"; }
-ok()    { printf '\033[0;32m[webox]\033[0m %s\n' "$*"; }
+info()  { printf '\033[0;34m[webox]\033[0m %s\n' "$*" >&2; }
+ok()    { printf '\033[0;32m[webox]\033[0m %s\n' "$*" >&2; }
 warn()  { printf '\033[0;33m[webox]\033[0m %s\n' "$*" >&2; }
 error() { printf '\033[0;31m[webox]\033[0m %s\n' "$*" >&2; exit 1; }
 
@@ -106,8 +106,10 @@ fetch_json() {
   local url="$1"
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL "${url}"
-  else
+  elif command -v wget >/dev/null 2>&1; then
     wget -qO- "${url}"
+  else
+    error "Neither curl nor wget found. Please install one and retry."
   fi
 }
 
