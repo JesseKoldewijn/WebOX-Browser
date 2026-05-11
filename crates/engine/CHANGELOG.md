@@ -4,6 +4,10 @@ All notable changes to webox-browser are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-05-11
+
+
+
 ## [0.1.1] - 2026-05-09
 
 
