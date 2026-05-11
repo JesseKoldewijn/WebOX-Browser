@@ -3,21 +3,25 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/JesseKoldewijn/webox-browser/main/scripts/install.sh | bash
-#   # or with a specific version:
+#   # or with a specific version (tag or semver):
+#   curl -fsSL ... | bash -s -- --version webox-browser-app-v1.2.3
 #   curl -fsSL ... | bash -s -- --version v1.2.3
 #   # or to a custom install directory:
 #   curl -fsSL ... | bash -s -- --install-dir /usr/local/lib/webox
 #
 # What it does:
 #   1. Detects platform (linux-x64, linux-arm64, macos-arm64)
-#   2. Downloads the latest (or specified) release archive from GitHub Releases
+#   2. Downloads the latest (or specified) webox-browser-app release archive from GitHub
 #   3. Extracts binary + CEF runtime to INSTALL_DIR (default: ~/.local/share/webox)
-#   4. Creates a symlink at ~/.local/bin/webox-browser (or /usr/local/bin with --system)
+#   4. Sets setuid root on chrome-sandbox (Linux only) so the CEF sandbox works
+#   5. Creates a symlink at ~/.local/bin/webox-browser (or /usr/local/bin with --system)
 
 set -euo pipefail
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 REPO="JesseKoldewijn/webox-browser"
+# The release-plz tag prefix for the browser app crate.
+TAG_PREFIX="webox-browser-app-v"
 BINARY_NAME="webox-browser-app"
 SYMLINK_NAME="webox-browser"
 DEFAULT_INSTALL_DIR="${HOME}/.local/share/webox"
@@ -48,8 +52,8 @@ if $SYSTEM_INSTALL; then
 fi
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
-info()  { printf '\033[0;34m[webox]\033[0m %s\n' "$*"; }
-ok()    { printf '\033[0;32m[webox]\033[0m %s\n' "$*"; }
+info()  { printf '\033[0;34m[webox]\033[0m %s\n' "$*" >&2; }
+ok()    { printf '\033[0;32m[webox]\033[0m %s\n' "$*" >&2; }
 warn()  { printf '\033[0;33m[webox]\033[0m %s\n' "$*" >&2; }
 error() { printf '\033[0;31m[webox]\033[0m %s\n' "$*" >&2; exit 1; }
 
@@ -97,21 +101,59 @@ download() {
   fi
 }
 
-# Resolve "latest" to a concrete version tag via the GitHub API.
-resolve_version() {
-  local version="$1"
-  if [[ "${version}" == "latest" ]]; then
-    info "Resolving latest release version …"
-    local api_url="https://api.github.com/repos/${REPO}/releases/latest"
-    if command -v curl >/dev/null 2>&1; then
-      version="$(curl -fsSL "${api_url}" | grep '"tag_name"' | sed 's/.*"tag_name": "\(.*\)".*/\1/')"
-    else
-      version="$(wget -qO- "${api_url}" | grep '"tag_name"' | sed 's/.*"tag_name": "\(.*\)".*/\1/')"
-    fi
-    [[ -n "${version}" ]] || error "Could not resolve latest release version from GitHub API."
-    info "Latest version: ${version}"
+# Fetch JSON from a URL (stdout).
+fetch_json() {
+  local url="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "${url}"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- "${url}"
+  else
+    error "Neither curl nor wget found. Please install one and retry."
   fi
-  echo "${version}"
+}
+
+# Resolve the user-supplied version to a full release tag and a plain semver.
+#
+# Inputs:
+#   $1 — "latest", a full tag like "webox-browser-app-v0.1.1", or a bare
+#        semver like "v0.1.1" / "0.1.1"
+#
+# Outputs (to stdout, newline-separated):
+#   line 1 — full tag  (e.g. "webox-browser-app-v0.1.1")
+#   line 2 — semver    (e.g. "0.1.1")
+resolve_version() {
+  local input="$1"
+  local tag semver
+
+  if [[ "${input}" == "latest" ]]; then
+    info "Resolving latest webox-browser-app release ..."
+    # The /releases/latest endpoint returns whichever release GitHub has marked
+    # as "latest" — which may be a different crate's release in a monorepo.
+    # Query all releases and pick the first webox-browser-app-v* tag instead.
+    local api_url="https://api.github.com/repos/${REPO}/releases"
+    tag="$(fetch_json "${api_url}" \
+      | grep '"tag_name"' \
+      | grep -m1 "\"${TAG_PREFIX}" \
+      | sed 's/.*"tag_name": "\([^"]*\)".*/\1/')"
+    [[ -n "${tag}" ]] || error "Could not find a webox-browser-app release via the GitHub API."
+    info "Latest release tag: ${tag}"
+  elif [[ "${input}" == "${TAG_PREFIX}"* ]]; then
+    # Already a full tag, e.g. "webox-browser-app-v0.1.1"
+    tag="${input}"
+  elif [[ "${input}" =~ ^v?[0-9] ]]; then
+    # Bare semver: "v0.1.1" or "0.1.1" — construct the full tag
+    semver="${input#v}"
+    tag="${TAG_PREFIX}${semver}"
+    info "Resolved version tag: ${tag}"
+  else
+    error "Unrecognised version format: '${input}'. Use 'latest', 'v0.1.1', or the full tag 'webox-browser-app-v0.1.1'."
+  fi
+
+  # Extract the plain semver from the tag (strips "webox-browser-app-v" prefix)
+  semver="${tag#"${TAG_PREFIX}"}"
+
+  printf '%s\n%s\n' "${tag}" "${semver}"
 }
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -126,26 +168,46 @@ main() {
   platform="$(detect_platform)"
   info "Detected platform: ${platform}"
 
-  local version
-  version="$(resolve_version "${VERSION}")"
-  local ver_no_v="${version#v}"
+  # Resolve version to a full tag + plain semver
+  local resolved tag semver
+  resolved="$(resolve_version "${VERSION}")"
+  tag="$(echo "${resolved}"    | sed -n '1p')"
+  semver="$(echo "${resolved}" | sed -n '2p')"
 
-  local archive_name="webox-browser-${ver_no_v}-${platform}.tar.gz"
-  local download_url="https://github.com/${REPO}/releases/download/${version}/${archive_name}"
+  local archive_name="webox-browser-${semver}-${platform}.tar.gz"
+  local download_url="https://github.com/${REPO}/releases/download/${tag}/${archive_name}"
 
   local tmp_dir
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "${tmp_dir}"' EXIT
 
-  info "Downloading ${archive_name} …"
+  info "Downloading ${archive_name} ..."
   download "${download_url}" "${tmp_dir}/${archive_name}"
 
-  info "Extracting to ${INSTALL_DIR} …"
+  info "Extracting to ${INSTALL_DIR} ..."
   mkdir -p "${INSTALL_DIR}"
   tar -xzf "${tmp_dir}/${archive_name}" -C "${INSTALL_DIR}"
 
   # Ensure the binary is executable
   chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
+
+  # ── chrome-sandbox setuid (Linux only) ────────────────────────────────────
+  # CEF's renderer sandbox requires chrome-sandbox to be owned by root and
+  # have the setuid bit set (mode 4755). Without this CEF either refuses to
+  # start or falls back to --no-sandbox, which weakens security.
+  # This is standard practice for all Chromium-based browsers (Chrome, Electron).
+  if [[ "${platform}" == linux-* ]] && [ -f "${INSTALL_DIR}/chrome-sandbox" ]; then
+    if sudo -n true 2>/dev/null; then
+      sudo chown root:root "${INSTALL_DIR}/chrome-sandbox"
+      sudo chmod 4755      "${INSTALL_DIR}/chrome-sandbox"
+      ok "chrome-sandbox: setuid root applied"
+    else
+      warn "chrome-sandbox requires root ownership for the CEF sandbox."
+      warn "Run the following to enable it:"
+      warn "  sudo chown root:root '${INSTALL_DIR}/chrome-sandbox'"
+      warn "  sudo chmod 4755      '${INSTALL_DIR}/chrome-sandbox'"
+    fi
+  fi
 
   # ── Symlink ────────────────────────────────────────────────────────────────
   mkdir -p "${BIN_DIR}"
@@ -156,7 +218,7 @@ main() {
   fi
   ln -s "${INSTALL_DIR}/${BINARY_NAME}" "${symlink}"
 
-  ok "Installed webox-browser ${version} to ${INSTALL_DIR}"
+  ok "Installed webox-browser ${semver} to ${INSTALL_DIR}"
   ok "Symlink created at ${symlink}"
 
   # Warn if BIN_DIR is not in PATH

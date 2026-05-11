@@ -2,15 +2,16 @@
 #
 # Usage (from PowerShell):
 #   irm https://raw.githubusercontent.com/JesseKoldewijn/webox-browser/main/scripts/install.ps1 | iex
-#   # or with a specific version:
+#   # or with a specific version (full tag, or bare semver):
+#   & ([scriptblock]::Create((irm https://...install.ps1))) -Version webox-browser-app-v1.2.3
 #   & ([scriptblock]::Create((irm https://...install.ps1))) -Version v1.2.3
 #   # or to a custom install directory:
 #   & ([scriptblock]::Create((irm https://...install.ps1))) -InstallDir "C:\webox"
 #
 # What it does:
 #   1. Detects architecture (x64 only — Windows ARM builds are not published)
-#   2. Downloads the latest (or specified) release archive from GitHub Releases
-#   3. Extracts binary + CEF runtime to InstallDir (default: %LOCALAPPDATA%\webox)
+#   2. Resolves the latest webox-browser-app release tag from GitHub
+#   3. Downloads the release archive and extracts to InstallDir
 #   4. Adds InstallDir to the current user's PATH (unless -NoPath is passed)
 
 #Requires -Version 5.1
@@ -27,6 +28,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $REPO        = "JesseKoldewijn/webox-browser"
+# The release-plz tag prefix for the browser app crate.
+$TAG_PREFIX  = "webox-browser-app-v"
 $BINARY_NAME = "webox-browser-app.exe"
 $PLATFORM    = "windows-x64"
 
@@ -49,27 +52,43 @@ if ($arch -ne [System.Runtime.InteropServices.Architecture]::X64) {
 }
 
 # ── Resolve version ────────────────────────────────────────────────────────────
+# Release tags in this monorepo follow the pattern "webox-browser-app-v<semver>".
+# GitHub's /releases/latest endpoint returns whichever release is marked "Latest"
+# — in a monorepo that can be any crate's release, not necessarily the browser.
+# We query /releases and find the first webox-browser-app-v* tag instead.
+
 if ($Version -eq "latest") {
-    Write-Info "Resolving latest release version ..."
-    $apiUrl  = "https://api.github.com/repos/$REPO/releases/latest"
-    $release = Invoke-RestMethod -Uri $apiUrl -Headers @{ "User-Agent" = "webox-installer" }
+    Write-Info "Resolving latest webox-browser-app release ..."
+    $apiUrl   = "https://api.github.com/repos/$REPO/releases"
+    $releases = Invoke-RestMethod -Uri $apiUrl -Headers @{ "User-Agent" = "webox-installer" }
+    $release  = $releases | Where-Object { $_.tag_name -like "$TAG_PREFIX*" } | Select-Object -First 1
+    if (-not $release) { Write-Fail "Could not find a webox-browser-app release via the GitHub API." }
     $Version = $release.tag_name
-    if (-not $Version) { Write-Fail "Could not resolve latest version from GitHub API." }
-    Write-Info "Latest version: $Version"
+    Write-Info "Latest release tag: $Version"
+} elseif ($Version -like "$TAG_PREFIX*") {
+    # Already a full tag — use as-is
+} elseif ($Version -match '^v?\d') {
+    # Bare semver: "v0.1.1" or "0.1.1" — construct the full tag
+    $semVer  = $Version -replace '^v', ''
+    $Version = "$TAG_PREFIX$semVer"
+    Write-Info "Resolved version tag: $Version"
+} else {
+    Write-Fail "Unrecognised version format: '$Version'. Use 'latest', 'v0.1.1', or the full tag 'webox-browser-app-v0.1.1'."
 }
 
-$verNoV      = $Version -replace '^v', ''
+# Extract plain semver from the full tag (strip "webox-browser-app-v" prefix)
+$verNoV      = $Version.Substring($TAG_PREFIX.Length)
 $archiveName = "webox-browser-${verNoV}-${PLATFORM}.zip"
 $downloadUrl = "https://github.com/$REPO/releases/download/$Version/$archiveName"
 
 # ── Download ───────────────────────────────────────────────────────────────────
-$tmpDir   = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [System.IO.Path]::GetRandomFileName())
-$tmpFile  = [System.IO.Path]::Combine($tmpDir, $archiveName)
+$tmpDir  = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [System.IO.Path]::GetRandomFileName())
+$tmpFile = [System.IO.Path]::Combine($tmpDir, $archiveName)
 New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
 
 try {
     Write-Info "Downloading $archiveName ..."
-    $progressPreference = 'SilentlyContinue'  # Speeds up Invoke-WebRequest significantly
+    $ProgressPreference = 'SilentlyContinue'  # Speeds up Invoke-WebRequest significantly
     Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpFile -UseBasicParsing
 
     # ── Extract ────────────────────────────────────────────────────────────────
@@ -97,7 +116,7 @@ try {
         }
     }
 
-    Write-Ok "Installed webox-browser $Version to $InstallDir"
+    Write-Ok "Installed webox-browser $verNoV to $InstallDir"
     Write-Ok "Run: webox-browser-app.exe"
     Write-Ok ""
     Write-Ok "Or create a shortcut/alias: ``$binaryPath``"
