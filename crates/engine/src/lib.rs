@@ -765,7 +765,7 @@ impl WeboxEngine {
             } else {
                 RuntimeBackend::Simulated
             },
-            primary_target: "linux-x86_64",
+            primary_target: config.startup.platform_target.runtime_plan_target(),
             integration_crate: "cef (tauri-apps/cef-rs)",
             ui_host: "eframe/egui",
             distribution_root: config.cef.distribution_root.clone(),
@@ -1751,7 +1751,8 @@ impl WeboxEngine {
     }
 
     fn check_live_runtime_readiness(&self) -> RuntimeReadiness {
-        let mut missing_paths = Vec::new();
+        let mut missing_assets = Vec::new();
+        let mut unwritable_runtime_dirs = Vec::new();
         let mut checked_paths = Vec::new();
 
         // Check distribution root and locales directory exist.
@@ -1764,7 +1765,7 @@ impl WeboxEngine {
         ] {
             checked_paths.push(format!("{label}: {path}"));
             if !Path::new(path).exists() {
-                missing_paths.push(format!("{label} ({path})"));
+                missing_assets.push(format!("{label} ({path})"));
             }
         }
 
@@ -1775,7 +1776,7 @@ impl WeboxEngine {
         let icudtl = Path::new(self.launch_settings.resources_dir.as_str()).join("icudtl.dat");
         checked_paths.push(format!("CEF resources (icudtl.dat): {}", icudtl.display()));
         if !icudtl.exists() {
-            missing_paths.push(format!(
+            missing_assets.push(format!(
                 "CEF resources ({}) — icudtl.dat not found; resources_dir may be wrong",
                 icudtl.display()
             ));
@@ -1786,7 +1787,7 @@ impl WeboxEngine {
         let subprocess = self.launch_settings.subprocess_path.as_str();
         checked_paths.push(format!("CEF subprocess: {subprocess}"));
         if !Path::new(subprocess).exists() {
-            missing_paths.push(format!("CEF subprocess ({subprocess})"));
+            missing_assets.push(format!("CEF subprocess ({subprocess})"));
         }
 
         for runtime_dir in [
@@ -1796,9 +1797,34 @@ impl WeboxEngine {
         ] {
             checked_paths.push(format!("runtime dir: {runtime_dir}"));
             if let Err(error) = fs::create_dir_all(runtime_dir) {
-                missing_paths.push(format!("runtime dir {runtime_dir}: {error}"));
+                unwritable_runtime_dirs.push(format!("runtime dir {runtime_dir}: {error}"));
             }
         }
+
+        let mut missing_paths = missing_assets;
+        missing_paths.extend(unwritable_runtime_dirs.iter().cloned());
+
+        let summary = if missing_paths.is_empty() {
+            format!(
+                "Live CEF prerequisites present; subprocess='{}', resources='{}', locales='{}', remote_debugging_port={}",
+                self.launch_settings.subprocess_path,
+                self.launch_settings.resources_dir,
+                self.launch_settings.locales_dir,
+                self.launch_settings.remote_debugging_port
+            )
+        } else {
+            let mut sections = Vec::new();
+            if !missing_paths.is_empty() {
+                sections.push(format!("failures: {}", missing_paths.join(", ")));
+            }
+            if !unwritable_runtime_dirs.is_empty() {
+                sections.push(format!(
+                    "runtime directories not writable: {}",
+                    unwritable_runtime_dirs.join(", ")
+                ));
+            }
+            format!("Live CEF prerequisites missing: {}", sections.join("; "))
+        };
 
         RuntimeReadiness {
             state: if missing_paths.is_empty() {
@@ -1808,20 +1834,7 @@ impl WeboxEngine {
             },
             live_mvp_ready: missing_paths.is_empty(),
             simulated: false,
-            summary: if missing_paths.is_empty() {
-                format!(
-                    "Live CEF prerequisites present; subprocess='{}', resources='{}', locales='{}', remote_debugging_port={}",
-                    self.launch_settings.subprocess_path,
-                    self.launch_settings.resources_dir,
-                    self.launch_settings.locales_dir,
-                    self.launch_settings.remote_debugging_port
-                )
-            } else {
-                format!(
-                    "Live CEF prerequisites missing: {}",
-                    missing_paths.join(", ")
-                )
-            },
+            summary,
             missing_paths,
             checked_paths,
         }
@@ -2069,9 +2082,15 @@ mod tests {
     }
 
     #[test]
-    fn runtime_plan_selects_real_cef_linux_target() {
+    fn runtime_plan_reports_current_platform_target() {
         let plan = WeboxEngine::runtime_plan(&AppConfig::development());
-        assert_eq!(plan.primary_target, "linux-x86_64");
+        assert_eq!(
+            plan.primary_target,
+            AppConfig::development()
+                .startup
+                .platform_target
+                .runtime_plan_target()
+        );
         assert_eq!(plan.integration_crate, "cef (tauri-apps/cef-rs)");
         assert_eq!(plan.ui_host, "eframe/egui");
     }
