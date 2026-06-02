@@ -316,9 +316,11 @@ jobs:
           }
 
           foreach ($dir in @('swiftshader/', 'vk_swiftshader/')) {
-            if ($entryNames | Where-Object { $_ -like "*$dir*" }) {
-              Write-Host "Verified nested runtime directory in archive: $dir"
+            if (-not ($entryNames | Where-Object { $_ -like "*$dir*" })) {
+              Write-Error "Missing nested runtime directory: $dir"
+              exit 1
             }
+            Write-Host "Verified nested runtime directory in archive: $dir"
           }
 
           Write-Host "CEF verified in archive: libcef.dll, icudtl.dat, resources.pak, locales/"
@@ -647,6 +649,15 @@ jobs:
           foreach ($relativeDir in $directoryOrder) {
             $cgId = New-WixId -Prefix 'AppFiles_' -RelativePath $relativeDir
             $extraRefs += "      <ComponentGroupRef Id=""$cgId"" />`n"
+          }
+
+          $generatedWxs = $sb.ToString()
+          foreach ($requiredDir in @('locales', 'swiftshader')) {
+            $requiredId = New-WixId -Prefix 'AppFiles_' -RelativePath $requiredDir
+            if (-not ($generatedWxs -match [regex]::Escape($requiredId))) {
+              Write-Error "Harvested MSI manifest is missing nested runtime directory mapping for: $requiredDir"
+              exit 1
+            }
           }
 
           # Patch webox-browser.wxs to inject subdirectory refs into the Feature

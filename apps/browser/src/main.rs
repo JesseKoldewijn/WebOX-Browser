@@ -228,8 +228,14 @@ impl BrowserApp {
 
         if !readiness.missing_paths.is_empty() {
             lines.push(format!(
-                "Missing runtime paths: {}",
+                "Missing runtime assets: {}",
                 readiness.missing_paths.join(", ")
+            ));
+        }
+        if !readiness.readiness_errors.is_empty() {
+            lines.push(format!(
+                "Runtime directory errors: {}",
+                readiness.readiness_errors.join(", ")
             ));
         }
         if !readiness.checked_paths.is_empty() {
@@ -280,6 +286,12 @@ impl BrowserApp {
                 lines.push(format!(
                     "Missing assets: {}",
                     readiness.missing_paths.join(", ")
+                ));
+            }
+            if !readiness.readiness_errors.is_empty() {
+                lines.push(format!(
+                    "Runtime directory errors: {}",
+                    readiness.readiness_errors.join(", ")
                 ));
             }
         }

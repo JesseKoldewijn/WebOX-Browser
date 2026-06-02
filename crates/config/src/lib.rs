@@ -1,5 +1,32 @@
 use std::{env, path::PathBuf};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnsupportedHostError {
+    os: String,
+    arch: String,
+}
+
+impl UnsupportedHostError {
+    fn new(os: &str, arch: &str) -> Self {
+        Self {
+            os: os.to_string(),
+            arch: arch.to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for UnsupportedHostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "unsupported host platform: os='{}', arch='{}'",
+            self.os, self.arch
+        )
+    }
+}
+
+impl std::error::Error for UnsupportedHostError {}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BrowserRuntimeMode {
     Simulated,
@@ -65,7 +92,8 @@ pub struct AppConfig {
 impl AppConfig {
     #[must_use]
     pub fn development() -> Self {
-        let platform_target = PlatformTarget::current();
+        let platform_target = PlatformTarget::current()
+            .unwrap_or_else(|error| panic!("{error}"));
         Self {
             startup: BrowserStartupConfig {
                 home_page: "https://example.com".to_string(),
@@ -134,7 +162,8 @@ impl AppConfig {
             .unwrap_or_default()
             .display()
             .to_string();
-        let platform_target = PlatformTarget::current();
+        let platform_target = PlatformTarget::current()
+            .unwrap_or_else(|error| panic!("{error}"));
         let paths = production_paths(platform_target, &exe_dir);
 
         Self {
@@ -180,16 +209,13 @@ impl AppConfig {
 }
 
 impl PlatformTarget {
-    #[must_use]
-    pub fn current() -> Self {
+    pub fn current() -> Result<Self, UnsupportedHostError> {
         match (env::consts::OS, env::consts::ARCH) {
-            ("linux", "x86_64") => Self::LinuxX64,
-            ("linux", "aarch64") => Self::LinuxArm64,
-            ("macos", "aarch64") => Self::MacosArm64,
-            ("windows", "x86_64") => Self::WindowsX64,
-            // Keep local development workable on unsupported hosts by falling
-            // back to the primary Linux config contract.
-            _ => Self::LinuxX64,
+            ("linux", "x86_64") => Ok(Self::LinuxX64),
+            ("linux", "aarch64") => Ok(Self::LinuxArm64),
+            ("macos", "aarch64") => Ok(Self::MacosArm64),
+            ("windows", "x86_64") => Ok(Self::WindowsX64),
+            (os, arch) => Err(UnsupportedHostError::new(os, arch)),
         }
     }
 }
@@ -300,8 +326,8 @@ fn home_dir() -> Option<PathBuf> {
 
 fn xdg_dir(var_name: &str, home: &std::path::Path, fallback: &str) -> PathBuf {
     env::var_os(var_name)
-        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty() && path.is_absolute())
         .unwrap_or_else(|| home.join(fallback))
 }
 
@@ -353,7 +379,7 @@ mod tests {
         assert_eq!(config.startup.remote_debugging_port, 9222);
         assert_eq!(config.startup.runtime_mode, BrowserRuntimeMode::RealCef);
         assert_eq!(config.startup.ui_host, BrowserUiHost::Eframe);
-        assert_eq!(config.startup.platform_target, PlatformTarget::current());
+        assert_eq!(config.startup.platform_target, PlatformTarget::current().unwrap());
     }
 
     #[test]
@@ -394,6 +420,15 @@ mod tests {
         assert_eq!(
             resolve_macos_bundle_root(&exe_dir),
             PathBuf::from("/Applications/WeboxBrowser.app")
+        );
+    }
+
+    #[test]
+    fn xdg_dir_rejects_relative_overrides() {
+        let home = PathBuf::from("/home/webox");
+        assert_eq!(
+            super::xdg_dir("TEST_XDG_DIR_MISSING", &home, ".cache"),
+            home.join(".cache")
         );
     }
 }

@@ -202,11 +202,19 @@ pub(crate) fn run_harness(config: &HarnessConfig) -> String {
         format!("- Runtime readiness: {:?}", readiness.state),
         format!("- Runtime readiness summary: {}", readiness.summary),
         format!(
-            "- Missing runtime paths: {}",
+            "- Missing runtime assets: {}",
             if readiness.missing_paths.is_empty() {
                 "none".to_string()
             } else {
                 readiness.missing_paths.join(", ")
+            }
+        ),
+        format!(
+            "- Runtime directory errors: {}",
+            if readiness.readiness_errors.is_empty() {
+                "none".to_string()
+            } else {
+                readiness.readiness_errors.join(", ")
             }
         ),
         String::new(),
