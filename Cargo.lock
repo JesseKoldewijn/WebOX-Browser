@@ -4131,7 +4131,7 @@ dependencies = [
 
 [[package]]
 name = "webox-browser-app"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "download-cef",
@@ -4145,11 +4145,11 @@ dependencies = [
 
 [[package]]
 name = "webox-config"
-version = "0.1.2"
+version = "0.1.3"
 
 [[package]]
 name = "webox-engine"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "cef",
  "webox-config",
@@ -4157,11 +4157,11 @@ dependencies = [
 
 [[package]]
 name = "webox-memory"
-version = "0.1.2"
+version = "0.1.3"
 
 [[package]]
 name = "webox-runtime-api"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "webox-config",
  "webox-engine",
@@ -4170,7 +4170,7 @@ dependencies = [
 
 [[package]]
 name = "webox-shell"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "webox-config",
  "webox-engine",
@@ -4180,11 +4180,11 @@ dependencies = [
 
 [[package]]
 name = "webox-ui"
-version = "0.1.2"
+version = "0.1.3"
 
 [[package]]
 name = "webox-workload-harness"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "webox-config",
  "webox-engine",
