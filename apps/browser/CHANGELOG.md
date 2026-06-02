@@ -4,6 +4,23 @@ All notable changes to webox-browser are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-06-02
+
+### Bug Fixes
+
+- Align production runtime paths across platforms ([#23](https://github.com/JesseKoldewijn/WebOX-Browser/issues/23)) ([`16848af`](https://github.com/JesseKoldewijn/WebOX-Browser/commit/16848afd2e8b83ecb08c02394140a169aa96a66d))
+
+* fix: align production runtime paths across platforms
+
+    * fix: tighten runtime readiness and windows packaging checks
+
+    * fix: relax optional windows runtime checks
+
+    * test: cover relative xdg override rejection
+
+
+
+
 ## [0.1.2] - 2026-05-11
 
 ### Bug Fixes
