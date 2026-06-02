@@ -365,7 +365,7 @@ mod tests {
         AppConfig, BrowserRuntimeMode, BrowserUiHost, PlatformTarget, production_paths,
         resolve_macos_bundle_root,
     };
-    use std::path::PathBuf;
+    use std::{env, path::PathBuf};
 
     #[test]
     fn development_config_targets_eight_gib_tabs() {
@@ -431,5 +431,16 @@ mod tests {
             super::xdg_dir("TEST_XDG_DIR_MISSING", &home, ".cache"),
             home.join(".cache")
         );
+
+        unsafe {
+            env::set_var("TEST_XDG_DIR_RELATIVE", "relative/path");
+        }
+        assert_eq!(
+            super::xdg_dir("TEST_XDG_DIR_RELATIVE", &home, ".cache"),
+            home.join(".cache")
+        );
+        unsafe {
+            env::remove_var("TEST_XDG_DIR_RELATIVE");
+        }
     }
 }
