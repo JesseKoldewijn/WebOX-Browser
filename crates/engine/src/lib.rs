@@ -1796,10 +1796,7 @@ impl WeboxEngine {
         let cef_binary = distribution_root.join(platform_cef_binary_name());
         checked_paths.push(format!("CEF binary: {}", cef_binary.display()));
         if !cef_binary.exists() {
-            missing_assets.push(format!(
-                "CEF binary ({})",
-                cef_binary.display()
-            ));
+            missing_assets.push(format!("CEF binary ({})", cef_binary.display()));
         }
 
         // Validate resources directory by checking for icudtl.dat — CEF's

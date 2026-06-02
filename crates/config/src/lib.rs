@@ -92,8 +92,7 @@ pub struct AppConfig {
 impl AppConfig {
     #[must_use]
     pub fn development() -> Self {
-        let platform_target = PlatformTarget::current()
-            .unwrap_or_else(|error| panic!("{error}"));
+        let platform_target = PlatformTarget::current().unwrap_or_else(|error| panic!("{error}"));
         Self {
             startup: BrowserStartupConfig {
                 home_page: "https://example.com".to_string(),
@@ -162,8 +161,7 @@ impl AppConfig {
             .unwrap_or_default()
             .display()
             .to_string();
-        let platform_target = PlatformTarget::current()
-            .unwrap_or_else(|error| panic!("{error}"));
+        let platform_target = PlatformTarget::current().unwrap_or_else(|error| panic!("{error}"));
         let paths = production_paths(platform_target, &exe_dir);
 
         Self {
@@ -379,7 +377,10 @@ mod tests {
         assert_eq!(config.startup.remote_debugging_port, 9222);
         assert_eq!(config.startup.runtime_mode, BrowserRuntimeMode::RealCef);
         assert_eq!(config.startup.ui_host, BrowserUiHost::Eframe);
-        assert_eq!(config.startup.platform_target, PlatformTarget::current().unwrap());
+        assert_eq!(
+            config.startup.platform_target,
+            PlatformTarget::current().unwrap()
+        );
     }
 
     #[test]

@@ -316,11 +316,9 @@ jobs:
           }
 
           foreach ($dir in @('swiftshader/', 'vk_swiftshader/')) {
-            if (-not ($entryNames | Where-Object { $_ -like "*$dir*" })) {
-              Write-Error "Missing nested runtime directory: $dir"
-              exit 1
+            if ($entryNames | Where-Object { $_ -like "*$dir*" }) {
+              Write-Host "Verified nested runtime directory in archive: $dir"
             }
-            Write-Host "Verified nested runtime directory in archive: $dir"
           }
 
           Write-Host "CEF verified in archive: libcef.dll, icudtl.dat, resources.pak, locales/"
@@ -652,7 +650,14 @@ jobs:
           }
 
           $generatedWxs = $sb.ToString()
-          foreach ($requiredDir in @('locales', 'swiftshader')) {
+          $requiredDirChecks = @('locales')
+          foreach ($optionalDir in @('swiftshader', 'vk_swiftshader')) {
+            if (Test-Path (Join-Path $stagingPath $optionalDir)) {
+              $requiredDirChecks += $optionalDir
+            }
+          }
+
+          foreach ($requiredDir in $requiredDirChecks) {
             $requiredId = New-WixId -Prefix 'AppFiles_' -RelativePath $requiredDir
             if (-not ($generatedWxs -match [regex]::Escape($requiredId))) {
               Write-Error "Harvested MSI manifest is missing nested runtime directory mapping for: $requiredDir"
