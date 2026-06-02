@@ -1,3 +1,8 @@
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 use eframe::egui;
 use egui::RichText;
 use webox_config::AppConfig;
@@ -223,8 +228,14 @@ impl BrowserApp {
 
         if !readiness.missing_paths.is_empty() {
             lines.push(format!(
-                "Missing runtime paths: {}",
+                "Missing runtime assets: {}",
                 readiness.missing_paths.join(", ")
+            ));
+        }
+        if !readiness.readiness_errors.is_empty() {
+            lines.push(format!(
+                "Runtime directory errors: {}",
+                readiness.readiness_errors.join(", ")
             ));
         }
         if !readiness.checked_paths.is_empty() {
@@ -275,6 +286,12 @@ impl BrowserApp {
                 lines.push(format!(
                     "Missing assets: {}",
                     readiness.missing_paths.join(", ")
+                ));
+            }
+            if !readiness.readiness_errors.is_empty() {
+                lines.push(format!(
+                    "Runtime directory errors: {}",
+                    readiness.readiness_errors.join(", ")
                 ));
             }
         }

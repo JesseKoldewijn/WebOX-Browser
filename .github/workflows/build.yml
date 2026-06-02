@@ -295,16 +295,33 @@ jobs:
         if: matrix.archive_cmd == 'zip'
         shell: pwsh
         run: |
-          # Fail the build if the primary CEF library is missing from the archive.
+          # Fail the build if core Windows CEF runtime assets are missing.
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $zip = [System.IO.Compression.ZipFile]::OpenRead($env:ARCHIVE)
-          $hasCef = $zip.Entries | Where-Object { $_.Name -like 'libcef*' }
+          $entryNames = $zip.Entries | ForEach-Object { $_.FullName }
           $zip.Dispose()
-          if (-not $hasCef) {
-            Write-Error "Primary CEF library (libcef.dll) is missing from $env:ARCHIVE"
-            exit 1
+
+          $requiredPatterns = @(
+            '(^|/)libcef\.dll$',
+            '(^|/)icudtl\.dat$',
+            '(^|/)resources\.pak$',
+            '(^|/)locales/'
+          )
+
+          foreach ($pattern in $requiredPatterns) {
+            if (-not ($entryNames | Where-Object { $_ -match $pattern })) {
+              Write-Error "Required Windows CEF asset missing from $env:ARCHIVE (pattern: $pattern)"
+              exit 1
+            }
           }
-          Write-Host "CEF verified in archive: $($hasCef[0].FullName)"
+
+          foreach ($dir in @('swiftshader/', 'vk_swiftshader/')) {
+            if ($entryNames | Where-Object { $_ -like "*$dir*" }) {
+              Write-Host "Verified nested runtime directory in archive: $dir"
+            }
+          }
+
+          Write-Host "CEF verified in archive: libcef.dll, icudtl.dat, resources.pak, locales/"
 
       # ── Upload archive ────────────────────────────────────────────────────────
       - name: Upload archive artifact (tar)
@@ -555,29 +572,49 @@ jobs:
           $stagingPath = (Resolve-Path "staging").Path
           $appFilesWxs = "AppFiles.wxs"
 
-          # Build a flat list of components — handles one level of subdirectory
-          # (CEF ships locales/ as the only subdir).
+          function New-WixId([string]$Prefix, [string]$RelativePath) {
+            $normalized = $RelativePath -replace '[\\/\.-]', '_'
+            return "$Prefix$normalized"
+          }
+
+          function Add-WixDirectoryTree {
+            param(
+              [System.Text.StringBuilder]$Builder,
+              [string]$BasePath,
+              [System.IO.DirectoryInfo]$Directory,
+              [string]$ParentId,
+              [hashtable]$DirectoryMap,
+              [System.Collections.Generic.List[string]]$DirectoryOrder
+            )
+
+            $relativePath = [System.IO.Path]::GetRelativePath($BasePath, $Directory.FullName)
+            $dirId = New-WixId -Prefix 'dir_' -RelativePath $relativePath
+            $DirectoryMap[$relativePath] = $dirId
+            $DirectoryOrder.Add($relativePath) | Out-Null
+            $null = $Builder.AppendLine("    <DirectoryRef Id=""$ParentId"">")
+            $null = $Builder.AppendLine("      <Directory Id=""$dirId"" Name=""$($Directory.Name)"" />")
+            $null = $Builder.AppendLine('    </DirectoryRef>')
+
+            Get-ChildItem -Path $Directory.FullName -Directory | ForEach-Object {
+              Add-WixDirectoryTree -Builder $Builder -BasePath $BasePath -Directory $_ -ParentId $dirId -DirectoryMap $DirectoryMap -DirectoryOrder $DirectoryOrder
+            }
+          }
+
           $sb = [System.Text.StringBuilder]::new()
           $null = $sb.AppendLine('<?xml version="1.0" encoding="UTF-8"?>')
           $null = $sb.AppendLine('<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">')
           $null = $sb.AppendLine('  <Fragment>')
 
-          # Sub-directories: reference INSTALLFOLDER (already declared in webox-browser.wxs)
-          # and nest sub-directory IDs inside it via DirectoryRef to avoid duplicate-id errors.
-          $subdirs = Get-ChildItem -Path $stagingPath -Directory
-          if ($subdirs) {
-            $null = $sb.AppendLine('    <DirectoryRef Id="INSTALLFOLDER">')
-            foreach ($sd in $subdirs) {
-              $dirId = "dir_$($sd.Name -replace '[^\w]','_')"
-              $null = $sb.AppendLine("      <Directory Id=""$dirId"" Name=""$($sd.Name)"" />")
-            }
-            $null = $sb.AppendLine('    </DirectoryRef>')
+          $directoryMap = @{}
+          $directoryOrder = [System.Collections.Generic.List[string]]::new()
+          Get-ChildItem -Path $stagingPath -Directory | ForEach-Object {
+            Add-WixDirectoryTree -Builder $sb -BasePath $stagingPath -Directory $_ -ParentId 'INSTALLFOLDER' -DirectoryMap $directoryMap -DirectoryOrder $directoryOrder
           }
 
           # Top-level files component group
           $null = $sb.AppendLine('    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">')
           Get-ChildItem -Path $stagingPath -File | ForEach-Object {
-            $fid = "f_$($_.Name -replace '[^\w]','_')"
+            $fid = New-WixId -Prefix 'f_' -RelativePath $_.Name
             $null = $sb.AppendLine("      <Component>")
             $null = $sb.AppendLine("        <File Id=""$fid"" Source=""staging\$($_.Name)"" />")
             $null = $sb.AppendLine("      </Component>")
@@ -585,14 +622,17 @@ jobs:
           $null = $sb.AppendLine('    </ComponentGroup>')
 
           # Subdirectory component groups
-          foreach ($sd in $subdirs) {
-            $dirId = "dir_$($sd.Name -replace '[^\w]','_')"
-            $cgId  = "AppFiles_$($sd.Name -replace '[^\w]','_')"
+          foreach ($relativeDir in $directoryOrder) {
+            $dirId = $directoryMap[$relativeDir]
+            $cgId  = New-WixId -Prefix 'AppFiles_' -RelativePath $relativeDir
+            $relativeDirWindows = $relativeDir -replace '/', '\\'
             $null = $sb.AppendLine("    <ComponentGroup Id=""$cgId"" Directory=""$dirId"">")
-            Get-ChildItem -Path $sd.FullName -File | ForEach-Object {
-              $fid = "f_$($sd.Name)_$($_.Name -replace '[^\w]','_')"
+            Get-ChildItem -Path (Join-Path $stagingPath $relativeDirWindows) -File | ForEach-Object {
+              $relativeFile = [System.IO.Path]::GetRelativePath($stagingPath, $_.FullName)
+              $relativeFileWindows = $relativeFile -replace '/', '\\'
+              $fid = New-WixId -Prefix 'f_' -RelativePath $relativeFile
               $null = $sb.AppendLine("      <Component>")
-              $null = $sb.AppendLine("        <File Id=""$fid"" Source=""staging\$($sd.Name)\$($_.Name)"" />")
+              $null = $sb.AppendLine("        <File Id=""$fid"" Source=""staging\$relativeFileWindows"" />")
               $null = $sb.AppendLine("      </Component>")
             }
             $null = $sb.AppendLine('    </ComponentGroup>')
@@ -604,9 +644,25 @@ jobs:
 
           # Also generate a feature-ref fragment for subdirectory component groups
           $extraRefs = ""
-          foreach ($sd in $subdirs) {
-            $cgId = "AppFiles_$($sd.Name -replace '[^\w]','_')"
+          foreach ($relativeDir in $directoryOrder) {
+            $cgId = New-WixId -Prefix 'AppFiles_' -RelativePath $relativeDir
             $extraRefs += "      <ComponentGroupRef Id=""$cgId"" />`n"
+          }
+
+          $generatedWxs = $sb.ToString()
+          $requiredDirChecks = @('locales')
+          foreach ($optionalDir in @('swiftshader', 'vk_swiftshader')) {
+            if (Test-Path (Join-Path $stagingPath $optionalDir)) {
+              $requiredDirChecks += $optionalDir
+            }
+          }
+
+          foreach ($requiredDir in $requiredDirChecks) {
+            $requiredId = New-WixId -Prefix 'AppFiles_' -RelativePath $requiredDir
+            if (-not ($generatedWxs -match [regex]::Escape($requiredId))) {
+              Write-Error "Harvested MSI manifest is missing nested runtime directory mapping for: $requiredDir"
+              exit 1
+            }
           }
 
           # Patch webox-browser.wxs to inject subdirectory refs into the Feature
